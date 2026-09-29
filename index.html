@@ -1,584 +1,130 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#f4f6ef">
-    <title>Amazon BuyBox | Lector de ASIN</title>
-    <style>
-        :root {
-            color-scheme: light;
-            --paper: #f4f6ef;
-            --surface: #ffffff;
-            --ink: #1c2922;
-            --muted: #637168;
-            --line: #dce3d9;
-            --green: #126b4f;
-            --green-dark: #0d513c;
-            --lime: #d8f36a;
-            --red: #a52b27;
-            --red-wash: #fff1ef;
-            --green-wash: #edf7ef;
-        }
-
-        * { box-sizing: border-box; }
-
-        body {
-            min-width: 320px;
-            min-height: 100vh;
-            margin: 0;
-            background:
-                radial-gradient(ellipse at 8% 0%, rgba(216, 243, 106, 0.28), transparent 34rem),
-                var(--paper);
-            color: var(--ink);
-            font-family: "Trebuchet MS", "Segoe UI", sans-serif;
-        }
-
-        button, input { font: inherit; }
-
-        button:focus-visible, input:focus-visible, label:focus-within {
-            outline: 3px solid #80a929;
-            outline-offset: 3px;
-        }
-
-        .topbar {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            min-height: 66px;
-            padding: 0 clamp(20px, 6vw, 84px);
-            border-bottom: 1px solid rgba(28, 41, 34, 0.12);
-        }
-
-        .brand {
-            display: inline-flex;
-            align-items: center;
-            gap: 11px;
-            color: var(--ink);
-            font-size: 14px;
-            font-weight: 700;
-        }
-
-        .brand-mark {
-            display: grid;
-            width: 30px;
-            aspect-ratio: 1;
-            place-items: center;
-            border-radius: 8px;
-            background: var(--green);
-            color: white;
-            font-family: Georgia, serif;
-            font-size: 17px;
-        }
-
-        .topbar-note {
-            color: var(--muted);
-            font-size: 12px;
-        }
-
-        main {
-            width: min(100% - 40px, 920px);
-            margin: clamp(48px, 9vh, 92px) auto 72px;
-        }
-
-        .eyebrow {
-            margin: 0 0 14px;
-            color: var(--green);
-            font-size: 11px;
-            font-weight: 700;
-            letter-spacing: 0;
-            text-transform: uppercase;
-        }
-
-        h1, h2, p { margin-top: 0; }
-
-        h1 {
-            max-width: 650px;
-            margin-bottom: 12px;
-            font-family: Georgia, "Times New Roman", serif;
-            font-size: clamp(36px, 6vw, 58px);
-            font-weight: 400;
-            line-height: 1.06;
-        }
-
-        .intro {
-            max-width: 590px;
-            margin-bottom: 35px;
-            color: var(--muted);
-            font-size: 15px;
-            line-height: 1.65;
-        }
-
-        .workspace {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) 230px;
-            gap: 34px;
-            align-items: start;
-            padding-top: 25px;
-            border-top: 1px solid var(--line);
-        }
-
-        .section-heading {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 18px;
-            margin-bottom: 17px;
-        }
-
-        h2 {
-            margin-bottom: 0;
-            font-family: Georgia, "Times New Roman", serif;
-            font-size: 23px;
-            font-weight: 400;
-        }
-
-        .button {
-            min-height: 42px;
-            padding: 0 15px;
-            border: 1px solid var(--green);
-            border-radius: 5px;
-            background: var(--green);
-            color: white;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 700;
-        }
-
-        .button:hover { background: var(--green-dark); }
-
-        .button-secondary {
-            border-color: var(--line);
-            background: var(--surface);
-            color: var(--ink);
-        }
-
-        .button-secondary:hover {
-            border-color: var(--green);
-            background: var(--surface);
-        }
-
-        .empty-state, .results {
-            min-height: 166px;
-            padding: 20px;
-            border: 1px solid var(--line);
-            border-radius: 6px;
-            background: rgba(255, 255, 255, 0.74);
-        }
-
-        .empty-state {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            color: var(--muted);
-            font-size: 14px;
-        }
-
-        .empty-icon {
-            display: grid;
-            flex: 0 0 42px;
-            width: 42px;
-            aspect-ratio: 1;
-            place-items: center;
-            border-radius: 50%;
-            background: var(--lime);
-            color: var(--ink);
-            font-size: 19px;
-        }
-
-        .status {
-            display: none;
-            margin: 0 0 15px;
-            padding: 12px 14px;
-            border-radius: 5px;
-            font-size: 13px;
-            line-height: 1.5;
-        }
-
-        .status[data-kind="error"] {
-            display: block;
-            background: var(--red-wash);
-            color: var(--red);
-        }
-
-        .status[data-kind="success"] {
-            display: block;
-            background: var(--green-wash);
-            color: var(--green-dark);
-        }
-
-        .status[data-kind="loading"] {
-            display: block;
-            background: #f0f3e8;
-            color: var(--ink);
-        }
-
-        .results { padding: 0; overflow: hidden; }
-
-        .results-header {
-            display: flex;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 14px 17px;
-            border-bottom: 1px solid var(--line);
-            color: var(--muted);
-            font-size: 12px;
-        }
-
-        .results-header strong { color: var(--ink); }
-
-        .asin-list {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-            gap: 8px;
-            max-height: 310px;
-            margin: 0;
-            padding: 16px;
-            overflow: auto;
-            list-style: none;
-        }
-
-        .asin-list li {
-            padding: 9px 10px;
-            border: 1px solid var(--line);
-            border-radius: 4px;
-            background: white;
-            font-family: Consolas, "Courier New", monospace;
-            font-size: 12px;
-        }
-
-        .aside {
-            padding-left: 22px;
-            border-left: 1px solid var(--line);
-        }
-
-        .aside-label {
-            margin: 2px 0 14px;
-            color: var(--muted);
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-
-        .aside p {
-            margin-bottom: 0;
-            color: var(--muted);
-            font-size: 13px;
-            line-height: 1.7;
-        }
-
-        dialog {
-            width: min(100% - 32px, 490px);
-            padding: 0;
-            border: 1px solid var(--line);
-            border-radius: 8px;
-            background: var(--surface);
-            color: var(--ink);
-            box-shadow: 0 24px 80px rgba(20, 40, 29, 0.22);
-        }
-
-        dialog::backdrop { background: rgba(19, 32, 25, 0.54); }
-
-        .dialog-content { padding: clamp(22px, 5vw, 34px); }
-
-        .dialog-top {
-            display: flex;
-            align-items: flex-start;
-            justify-content: space-between;
-            gap: 16px;
-        }
-
-        .dialog-top h2 { margin-bottom: 9px; font-size: 28px; }
-
-        .dialog-copy {
-            margin-bottom: 23px;
-            color: var(--muted);
-            font-size: 14px;
-            line-height: 1.6;
-        }
-
-        .close-button {
-            padding: 5px 0 5px 8px;
-            border: 0;
-            background: transparent;
-            color: var(--muted);
-            cursor: pointer;
-            font-size: 12px;
-        }
-
-        .file-picker {
-            display: grid;
-            min-height: 146px;
-            place-content: center;
-            gap: 8px;
-            padding: 18px;
-            border: 1px dashed #8c9b8e;
-            border-radius: 6px;
-            background: #f8faf5;
-            cursor: pointer;
-            text-align: center;
-        }
-
-        .file-picker:hover, .file-picker.is-dragging {
-            border-color: var(--green);
-            background: #f1f8e4;
-        }
-
-        .file-picker strong { font-size: 14px; }
-        .file-picker span { color: var(--muted); font-size: 12px; }
-        .file-picker input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-
-        .file-name {
-            min-height: 18px;
-            margin: 11px 0 17px;
-            color: var(--muted);
-            font-size: 12px;
-            overflow-wrap: anywhere;
-        }
-
-        .dialog-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 9px;
-        }
-
-        @media (max-width: 680px) {
-            .topbar { min-height: 58px; padding-inline: 20px; }
-            .topbar-note { font-size: 11px; }
-            main { margin-top: 48px; }
-            .workspace { grid-template-columns: 1fr; gap: 27px; }
-            .aside { padding: 0; border: 0; }
-            .aside-label { margin-bottom: 7px; }
-            .section-heading { align-items: flex-start; }
-            .button { padding-inline: 11px; }
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>Scraper Buybox Amazon</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+    .card { border: 1px solid #ccc; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    button { background: #0066cc; color: white; border: none; padding: 10px 15px; border-radius: 4px; cursor: pointer; }
+    button:disabled { background: #888; }
+    ul { list-style: none; padding: 0; }
+    li { padding: 8px 0; border-bottom: 1px solid #eee; }
+  </style>
 </head>
 <body>
-    <header class="topbar">
-        <div class="brand"><span class="brand-mark" aria-hidden="true">A</span>Amazon BuyBox</div>
-        <span class="topbar-note">Herramienta de lectura de ASIN</span>
-    </header>
 
-    <main>
-        <p class="eyebrow">Preparación de datos</p>
-        <h1>Productos listos para revisar.</h1>
-        <p class="intro">Carga una hoja de cálculo con la columna ASIN para comprobar los códigos antes de continuar.</p>
+  <h1>Extracción de datos Buybox</h1>
 
-        <div class="workspace">
-            <section aria-labelledby="products-title">
-                <div class="section-heading">
-                    <h2 id="products-title">Productos</h2>
-                    <button class="button button-secondary" id="open-dialog" type="button">Elegir otro Excel</button>
-                </div>
-                <p class="status" id="status" role="status" aria-live="polite"></p>
-                <div class="empty-state" id="empty-state">
-                    <span class="empty-icon" aria-hidden="true">+</span>
-                    <span>Aún no se ha cargado ningún archivo.</span>
-                </div>
-                <section class="results" id="results" aria-label="ASIN leídos" hidden>
-                    <div class="results-header">
-                        <strong id="result-count"></strong>
-                        <span id="result-file"></span>
-                    </div>
-                    <ul class="asin-list" id="asin-list"></ul>
-                </section>
-            </section>
+  <div class="card">
+    <h2>1. Cargar archivo Excel (ASIN)</h2>
+    <input type="file" id="excelInput" accept=".xlsx, .xls">
+    <br><br>
+    <button id="uploadBtn" onclick="uploadFile()">Procesar ASINs</button>
+    <p id="status"></p>
+  </div>
 
-            <aside class="aside">
-                <p class="aside-label">Formato esperado</p>
-                <p>El primer worksheet debe incluir una columna cuyo encabezado sea <strong>ASIN</strong>. Se aceptan archivos Excel .xlsx y .xls.</p>
-            </aside>
-        </div>
-    </main>
+  <div class="card">
+    <h2>2. Últimos 10 informes generados</h2>
+    <ul id="fileIndex">Cargando lista...</ul>
+  </div>
 
-    <dialog id="upload-dialog" aria-labelledby="dialog-title">
-        <form class="dialog-content" id="upload-form">
-            <div class="dialog-top">
-                <div>
-                    <p class="eyebrow">Importar archivo</p>
-                    <h2 id="dialog-title">Selecciona tu Excel</h2>
-                </div>
-                <button class="close-button" id="close-dialog" type="button" aria-label="Cerrar dialogo">Cerrar</button>
-            </div>
-            <p class="dialog-copy">Elige una hoja de calculo que contenga la columna ASIN.</p>
-            <label class="file-picker" id="file-picker" for="file-input" tabindex="0">
-                <strong>Buscar archivo</strong>
-                <span>Excel .xlsx o .xls</span>
-                <input id="file-input" name="file" type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" required>
-            </label>
-            <p class="file-name" id="file-name" aria-live="polite">Ningun archivo seleccionado</p>
-            <p class="status" id="dialog-status" role="alert" aria-live="assertive"></p>
-            <div class="dialog-actions">
-                <button class="button button-secondary" id="cancel-upload" type="button">Cancelar</button>
-                <button class="button" id="read-file" type="submit">Leer archivo</button>
-            </div>
-        </form>
-    </dialog>
+  <script>
+    // Token con permisos mínimos (Contents: Read/Write) configurado para la app
+    const GITHUB_CONFIG = {
+      owner: "TU_USUARIO_O_ORGANIZACION",
+      repo: "NOMBRE_DEL_REPOSITORIO",
+      branch: "main",
+      // Para evitar que los usuarios tengan cuenta, se usa un Fine-Grained PAT embebido 
+      // limitado EXCLUSIVAMENTE a modificar el repo de este proyecto.
+      token: "ghp_TU_FINE_GRAINED_TOKEN_AQUI" 
+    };
 
-    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
-    <script>
-        const dialog = document.getElementById('upload-dialog');
-        const form = document.getElementById('upload-form');
-        const fileInput = document.getElementById('file-input');
-        const filePicker = document.getElementById('file-picker');
-        const fileName = document.getElementById('file-name');
-        const dialogStatus = document.getElementById('dialog-status');
-        const status = document.getElementById('status');
-        const results = document.getElementById('results');
-        const emptyState = document.getElementById('empty-state');
-        const asinList = document.getElementById('asin-list');
+    // 1. Subir archivo Excel a la carpeta input/
+    async function uploadFile() {
+      const fileInput = document.getElementById('excelInput');
+      const status = document.getElementById('status');
+      const btn = document.getElementById('uploadBtn');
 
-        function setMessage(element, message, kind) {
-            element.textContent = message;
-            element.dataset.kind = kind;
+      if (!fileInput.files[0]) {
+        alert("Por favor, selecciona un archivo Excel.");
+        return;
+      }
+
+      btn.disabled = true;
+      status.innerText = "Subiendo archivo e iniciando procesamiento...";
+
+      const file = fileInput.files[0];
+      const reader = new FileReader();
+
+      reader.onload = async function(e) {
+        const contentBase64 = e.target.result.split(',')[1];
+        const path = "input/asins.xlsx";
+        const url = `https://api.github.com/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${path}`;
+
+        try {
+          // Obtener SHA previo si el archivo existe para poder sobrescribirlo
+          let sha = "";
+          const getRes = await fetch(url, {
+            headers: { "Authorization": `Bearer ${GITHUB_CONFIG.token}` }
+          });
+          if (getRes.ok) {
+            const data = await getRes.json();
+            sha = data.sha;
+          }
+
+          // Subir nuevo archivo
+          const putRes = await fetch(url, {
+            method: "PUT",
+            headers: {
+              "Authorization": `Bearer ${GITHUB_CONFIG.token}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              message: "Carga de nuevo Excel con ASINs",
+              content: contentBase64,
+              branch: GITHUB_CONFIG.branch,
+              ...(sha && { sha })
+            })
+          });
+
+          if (putRes.ok) {
+            status.innerText = "¡Archivo subido correctamente! El scraper se ha iniciado en segundo plano. Los resultados estarán listos en unos minutos.";
+          } else {
+            throw new Error("Error en la llamada a la API de GitHub");
+          }
+        } catch (err) {
+          status.innerText = "Error al procesar la solicitud: " + err.message;
+        } finally {
+          btn.disabled = false;
         }
+      };
 
-        function clearMessage(element) {
-            element.textContent = '';
-            delete element.dataset.kind;
-        }
+      reader.readAsDataURL(file);
+    }
 
-        function openDialog() {
-            clearMessage(dialogStatus);
-            if (!dialog.open) dialog.showModal();
-        }
+    // 2. Cargar índice de los últimos 10 archivos generados
+    async function loadIndex() {
+      const listEl = document.getElementById('fileIndex');
+      const url = `https://raw.githubusercontent.com/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/${GITHUB_CONFIG.branch}/results/index.json?t=${Date.now()}`;
 
-        function readAsins(workbook) {
-            const sheetName = workbook.SheetNames[0];
-            if (!sheetName) throw new Error('El archivo no contiene hojas de cálculo.');
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("No hay archivos generados aún.");
+        const files = await res.json();
 
-            const sheet = workbook.Sheets[sheetName];
-            const rows = XLSX.utils.sheet_to_json(sheet, {
-                header: 1,
-                blankrows: true,
-                defval: '',
-                raw: false
-            });
-            const header = rows[0];
+        listEl.innerHTML = files.map(file => `
+          <li>
+            📄 <strong>${file.name}</strong> (${file.date}) - 
+            <a href="${file.url}" download>Descargar Excel</a>
+          </li>
+        `).join('');
+      } catch (err) {
+        listEl.innerHTML = "<li>Aún no hay archivos de resultados disponibles.</li>";
+      }
+    }
 
-            if (!header) throw new Error('La primera hoja está vacía.');
-
-            const asinColumn = header.findIndex(value => String(value).trim().toUpperCase() === 'ASIN');
-            if (asinColumn === -1) throw new Error('No se encontró la columna ASIN en la primera fila.');
-
-            const asins = [];
-            const invalidRows = [];
-
-            for (let index = 1; index < rows.length; index += 1) {
-                const value = rows[index][asinColumn];
-                if (value === undefined || value === null || String(value).trim() === '') continue;
-
-                const asin = String(value).trim().toUpperCase();
-                if (!/^[A-Z0-9]{10}$/.test(asin)) {
-                    invalidRows.push(index + 1);
-                } else {
-                    asins.push(asin);
-                }
-            }
-
-            if (invalidRows.length) {
-                const shownRows = invalidRows.slice(0, 8).join(', ');
-                const moreRows = invalidRows.length > 8 ? ' y otras' : '';
-                throw new Error(`Hay códigos ASIN no válidos en las filas ${shownRows}${moreRows}. Cada ASIN debe tener 10 letras o números.`);
-            }
-
-            if (asins.length === 0) throw new Error('No se encontraron códigos ASIN debajo del encabezado.');
-            return asins;
-        }
-
-        async function handleFile(file) {
-            clearMessage(dialogStatus);
-            if (!file) return;
-
-            const extension = file.name.split('.').pop().toLowerCase();
-            if (!['xlsx', 'xls'].includes(extension)) {
-                setMessage(dialogStatus, 'Selecciona un archivo Excel .xlsx o .xls.', 'error');
-                fileInput.value = '';
-                fileName.textContent = 'Ningun archivo seleccionado';
-                return;
-            }
-
-            if (!window.XLSX) {
-                setMessage(dialogStatus, 'No se pudo cargar el lector de Excel. Comprueba la conexión e inténtalo de nuevo.', 'error');
-                return;
-            }
-
-            const readButton = document.getElementById('read-file');
-            readButton.disabled = true;
-            setMessage(dialogStatus, 'Leyendo archivo...', 'loading');
-
-            try {
-                const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-                const asins = readAsins(workbook);
-                const items = document.createDocumentFragment();
-
-                for (const asin of asins) {
-                    const item = document.createElement('li');
-                    item.textContent = asin;
-                    items.append(item);
-                }
-
-                asinList.replaceChildren(items);
-                document.getElementById('result-count').textContent = `${asins.length} ASIN leídos`;
-                document.getElementById('result-file').textContent = file.name;
-                results.hidden = false;
-                emptyState.hidden = true;
-                setMessage(status, 'Lectura completada. La ejecución del scraping aún no está conectada.', 'success');
-                clearMessage(dialogStatus);
-                dialog.close();
-            } catch (error) {
-                setMessage(dialogStatus, error instanceof Error ? error.message : 'No se pudo leer el archivo.', 'error');
-            } finally {
-                readButton.disabled = false;
-            }
-        }
-
-        fileInput.addEventListener('change', () => {
-            const file = fileInput.files[0];
-            fileName.textContent = file ? file.name : 'Ningun archivo seleccionado';
-            clearMessage(dialogStatus);
-        });
-
-        form.addEventListener('submit', event => {
-            event.preventDefault();
-            handleFile(fileInput.files[0]);
-        });
-
-        document.getElementById('open-dialog').addEventListener('click', openDialog);
-        document.getElementById('close-dialog').addEventListener('click', () => dialog.close());
-        document.getElementById('cancel-upload').addEventListener('click', () => dialog.close());
-
-        filePicker.addEventListener('keydown', event => {
-            if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault();
-                fileInput.click();
-            }
-        });
-
-        for (const eventName of ['dragenter', 'dragover']) {
-            filePicker.addEventListener(eventName, event => {
-                event.preventDefault();
-                filePicker.classList.add('is-dragging');
-            });
-        }
-
-        for (const eventName of ['dragleave', 'drop']) {
-            filePicker.addEventListener(eventName, event => {
-                event.preventDefault();
-                filePicker.classList.remove('is-dragging');
-            });
-        }
-
-        filePicker.addEventListener('drop', event => {
-            const [file] = event.dataTransfer.files;
-            if (!file) return;
-            fileInput.files = event.dataTransfer.files;
-            fileName.textContent = file.name;
-            clearMessage(dialogStatus);
-        });
-
-        window.addEventListener('DOMContentLoaded', openDialog, { once: true });
-    </script>
+    loadIndex();
+  </script>
 </body>
 </html>
