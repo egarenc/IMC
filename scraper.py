@@ -10,25 +10,32 @@ INPUT_FILE = "input/asins.xlsx"
 RESULTS_DIR = "results"
 INDEX_FILE = os.path.join(RESULTS_DIR, "index.json")
 
+async def accept_cookies_if_present(page):
+    """Acepta el banner de cookies si aparece para desencadenar el renderizado completo."""
+    try:
+        cookie_btn = page.locator("#sp-cc-accept")
+        if await cookie_btn.count() > 0 and await cookie_btn.is_visible():
+            await cookie_btn.click()
+            await asyncio.sleep(1)
+            print("🍪 Banner de cookies aceptado.")
+    except Exception:
+        pass
+
 async def solve_amazon_captcha_if_present(page):
     """Detecta si Amazon muestra la pantalla de CAPTCHA y lo resuelve automáticamente."""
     try:
-        # Selector de la imagen del CAPTCHA en el formulario de Amazon
         captcha_img = page.locator("form[action='/errors/validateCaptcha'] img")
         if await captcha_img.count() > 0:
             print("🧩 CAPTCHA de imagen detectado. Intentando resolver con IA local...")
             img_url = await captcha_img.get_attribute("src")
             
             if img_url:
-                # La librería descifra el texto de la imagen
                 captcha = AmazonCaptcha.from_driver_url(img_url)
                 solution = captcha.solve()
                 print(f"🔑 Solución calculada por amazoncaptcha: {solution}")
 
                 if solution and solution != "Not solved":
-                    # Escribir solución en el input de la página
                     await page.fill("#captchacharacters", solution)
-                    # Pulsar el botón de envío
                     await page.click("button[type='submit']")
                     await page.wait_for_load_state("domcontentloaded")
                     await asyncio.sleep(2)
@@ -46,13 +53,16 @@ async def scrape_buybox(page, asin):
         response = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
         await asyncio.sleep(2)
 
-        # 1. Verificar e intentar resolver CAPTCHA de imagen si aparece
+        # 1. Aceptar banner de cookies si existe
+        await accept_cookies_if_present(page)
+
+        # 2. Verificar e intentar resolver CAPTCHA de imagen si aparece
         captcha_solved = await solve_amazon_captcha_if_present(page)
         if captcha_solved:
             await page.wait_for_load_state("domcontentloaded")
             await asyncio.sleep(2)
 
-        # 2. Comprobar si seguimos bloqueados
+        # 3. Comprobar si seguimos bloqueados
         title = await page.title()
         content = await page.content()
         
@@ -60,7 +70,7 @@ async def scrape_buybox(page, asin):
             print(f"⚠️ El CAPTCHA no se pudo resolver para el ASIN: {asin}")
             return {
                 "ASIN": asin,
-                "Estado": "Bloqueado (CAPTCHA no resuelto)",
+                "Estado": "Bloqueado (CAPTCHA)",
                 "Precio": "N/D",
                 "Vendedor": "N/D",
                 "Disponibilidad": "N/D"
@@ -79,61 +89,81 @@ async def scrape_buybox(page, asin):
         seller_val = "N/D"
         avail_val = "N/D"
 
-        # 3. Extracción de Precio con selectores alternativos
-        try:
-            price_selectors = [
-                "#corePrice_feature_div .a-offscreen",
-                "#corePriceDisplay_desktop_feature_div .a-offscreen",
-                "#priceblock_ourprice",
-                ".a-price .a-offscreen",
-                "#price_inside_buybox"
-            ]
-            for sel in price_selectors:
+        # 4. Extracción de Precio con lista ampliada de selectores
+        price_selectors = [
+            "#corePrice_feature_div .a-offscreen",
+            "#corePriceDisplay_desktop_feature_div .a-offscreen",
+            ".apexPriceToPay .a-offscreen",
+            "#priceblock_ourprice",
+            "#priceblock_dealprice",
+            "#price_inside_buybox",
+            "#buyNewSection .a-color-price",
+            "#a-autoid-0-announce .a-color-price",
+            ".a-price .a-offscreen",
+            "span.a-price span.a-offscreen"
+        ]
+        
+        for sel in price_selectors:
+            try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    txt = await loc.text_content(timeout=2000)
-                    if txt and txt.strip():
+                    txt = await loc.text_content(timeout=1500)
+                    if txt and txt.strip() and "€" in txt:
                         price_val = txt.strip()
                         break
-        except Exception:
-            pass
+            except Exception:
+                continue
 
-        # 4. Extracción de Vendedor con selectores alternativos
-        try:
-            seller_selectors = [
-                "#merchant-info",
-                "#sellerProfileTriggerId",
-                "#tabular-buybox .tabular-buybox-text[s-seller]",
-                "#fbaProfileTriggerId"
-            ]
-            for sel in seller_selectors:
+        # 5. Extracción de Vendedor con lista ampliada
+        seller_selectors = [
+            "#merchant-info",
+            "#sellerProfileTriggerId",
+            "#shipsFromSoldBy_feature_div",
+            "#tabular-buybox",
+            "#tabular-buybox .tabular-buybox-text[s-seller]",
+            "#fbaProfileTriggerId",
+            "#merchant-info a"
+        ]
+        
+        for sel in seller_selectors:
+            try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    txt = await loc.text_content(timeout=2000)
+                    txt = await loc.text_content(timeout=1500)
                     if txt and txt.strip():
-                        seller_val = txt.strip()
-                        break
-        except Exception:
-            pass
+                        clean_seller = " ".join(txt.split())
+                        if len(clean_seller) > 2:
+                            seller_val = clean_seller
+                            break
+            except Exception:
+                continue
 
-        # 5. Extracción de Disponibilidad
-        try:
-            avail_selectors = [
-                "#availability",
-                "#outOfStock",
-                ".a-color-price"
-            ]
-            for sel in avail_selectors:
+        # 6. Extracción de Disponibilidad
+        avail_selectors = [
+            "#availability",
+            "#outOfStock",
+            ".a-color-price",
+            "#availability span"
+        ]
+        for sel in avail_selectors:
+            try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    txt = await loc.text_content(timeout=2000)
+                    txt = await loc.text_content(timeout=1500)
                     if txt and txt.strip():
-                        avail_val = txt.strip()
+                        avail_val = " ".join(txt.split())
                         break
-        except Exception:
-            pass
+            except Exception:
+                continue
 
-        estado = "OK" if (price_val != "N/D" or seller_val != "N/D") else "Sin Buybox / Layout alternativo"
+        # Evaluación del estado del producto
+        if price_val != "N/D" or seller_val != "N/D":
+            estado = "OK"
+        elif "no disponible" in content.lower() or "currently unavailable" in content.lower():
+            estado = "Producto No Disponible"
+        else:
+            estado = "Sin Buybox / Layout alternativo"
+            print(f"🔍 DEBUG ASIN {asin}: Título de página: '{title}'")
 
         return {
             "ASIN": asin,
@@ -231,7 +261,7 @@ async def main():
     with open(INDEX_FILE, "w") as f:
         json.dump(index_data, f, indent=2)
 
-    # Limpieza automática del archivo de entrada
+    # Limpieza automática del archivo de entrada al final
     if os.path.exists(INPUT_FILE):
         try:
             os.remove(INPUT_FILE)
