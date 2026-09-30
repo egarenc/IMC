@@ -6,7 +6,6 @@ on:
       - 'input/asins.xlsx'
   workflow_dispatch:
 
-# Conceder permisos explícitos de escritura al token automático del flujo
 permissions:
   contents: write
 
@@ -18,7 +17,7 @@ jobs:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }} # Forzar checkout de la rama main activa
+          ref: ${{ github.ref_name }}
 
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -39,8 +38,17 @@ jobs:
         run: |
           python scraper.py
 
+      - name: Verificar archivos generados
+        run: |
+          echo "=== Contenido de la carpeta results ==="
+          ls -la results/ || echo "Carpeta results no existe"
+          echo "=== Estado de Git ==="
+          git status
+
       - name: Guardar cambios y subir resultados a GitHub
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "Automated: Generado nuevo informe de Buybox"
-          file_pattern: "results/*"
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f results/
+          git commit -m "Automated: Generado nuevo informe de Buybox" || echo "No hay cambios para hacer commit"
+          git push origin ${{ github.ref_name }}
