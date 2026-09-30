@@ -32,7 +32,7 @@ jobs:
 
       - name: Instalar navegadores de Playwright
         run: |
-          npx playwright install chromium --with-deps
+          python -m playwright install chromium --with-deps
 
       - name: Ejecutar script de scraping
         run: |
