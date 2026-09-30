@@ -12,69 +12,158 @@ INDEX_FILE = os.path.join(RESULTS_DIR, "index.json")
 async def scrape_buybox(page, asin):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
-        await page.set_extra_http_headers({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept-Language": "es-ES,es;q=0.9"
-        })
-        
         response = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        
-        if response.status != 200:
-            return {"ASIN": asin, "Estado": f"Error HTTP {response.status}", "Precio": "N/D", "Vendedor": "N/D", "Disponibilidad": "N/D"}
+        await asyncio.sleep(2) # Pausa para renderizado JS
 
-        price = await page.locator("#corePrice_feature_div .a-offscreen, #priceblock_ourprice, .a-price .a-offscreen").first.text_content(timeout=5000)
-        seller = await page.locator("#merchant-info, #sellerProfileTriggerId").first.text_content(timeout=5000)
-        availability = await page.locator("#availability").first.text_content(timeout=5000)
+        # 1. Comprobar si Amazon devolvió un CAPTCHA
+        title = await page.title()
+        content = await page.content()
+        
+        if "captcha" in title.lower() or "robot" in title.lower() or "validateCaptcha" in content or "algo ha ido mal" in content.lower():
+            print(f"⚠️ CAPTCHA/Bloqueo detectado para ASIN: {asin}")
+            return {
+                "ASIN": asin,
+                "Estado": "Bloqueado (CAPTCHA de Amazon)",
+                "Precio": "N/D",
+                "Vendedor": "N/D",
+                "Disponibilidad": "N/D"
+            }
+
+        if response and response.status != 200:
+            return {
+                "ASIN": asin,
+                "Estado": f"Error HTTP {response.status}",
+                "Precio": "N/D",
+                "Vendedor": "N/D",
+                "Disponibilidad": "N/D"
+            }
+
+        price_val = "N/D"
+        seller_val = "N/D"
+        avail_val = "N/D"
+
+        # 2. Extracción de Precio con selectores alternativos
+        try:
+            price_selectors = [
+                "#corePrice_feature_div .a-offscreen",
+                "#corePriceDisplay_desktop_feature_div .a-offscreen",
+                "#priceblock_ourprice",
+                ".a-price .a-offscreen",
+                "#price_inside_buybox"
+            ]
+            for sel in price_selectors:
+                loc = page.locator(sel).first
+                if await loc.count() > 0:
+                    txt = await loc.text_content(timeout=2000)
+                    if txt and txt.strip():
+                        price_val = txt.strip()
+                        break
+        except Exception:
+            pass
+
+        # 3. Extracción de Vendedor con selectores alternativos
+        try:
+            seller_selectors = [
+                "#merchant-info",
+                "#sellerProfileTriggerId",
+                "#tabular-buybox .tabular-buybox-text[s-seller]",
+                "#fbaProfileTriggerId"
+            ]
+            for sel in seller_selectors:
+                loc = page.locator(sel).first
+                if await loc.count() > 0:
+                    txt = await loc.text_content(timeout=2000)
+                    if txt and txt.strip():
+                        seller_val = txt.strip()
+                        break
+        except Exception:
+            pass
+
+        # 4. Extracción de Disponibilidad
+        try:
+            avail_selectors = [
+                "#availability",
+                "#outOfStock",
+                ".a-color-price"
+            ]
+            for sel in avail_selectors:
+                loc = page.locator(sel).first
+                if await loc.count() > 0:
+                    txt = await loc.text_content(timeout=2000)
+                    if txt and txt.strip():
+                        avail_val = txt.strip()
+                        break
+        except Exception:
+            pass
+
+        estado = "OK" if (price_val != "N/D" or seller_val != "N/D") else "Sin Buybox / Layout alternativo"
 
         return {
             "ASIN": asin,
-            "Estado": "OK",
-            "Precio": price.strip() if price else "N/D",
-            "Vendedor": seller.strip() if seller else "N/D",
-            "Disponibilidad": availability.strip() if availability else "N/D"
+            "Estado": estado,
+            "Precio": price_val,
+            "Vendedor": seller_val,
+            "Disponibilidad": avail_val
         }
+
     except Exception as e:
-        return {"ASIN": asin, "Estado": f"Error: {str(e)}", "Precio": "N/D", "Vendedor": "N/D", "Disponibilidad": "N/D"}
+        print(f"Error procesando ASIN {asin}: {str(e)}")
+        return {
+            "ASIN": asin,
+            "Estado": f"Error: {str(e)}",
+            "Precio": "N/D",
+            "Vendedor": "N/D",
+            "Disponibilidad": "N/D"
+        }
 
 async def main():
     print("--- INICIANDO PROCESO DE SCRAPING ---")
-    print(f"Directorio actual: {os.getcwd()}")
-    
     if not os.path.exists(INPUT_FILE):
-        raise FileNotFoundError(f"❌ ERROR CRÍTICO: No existe el archivo {INPUT_FILE}")
+        raise FileNotFoundError(f"❌ No existe {INPUT_FILE}")
 
-    # Leer Excel
     df_input = pd.read_excel(INPUT_FILE)
-    print(f"Cabeceras detectadas en el Excel: {list(df_input.columns)}")
-
-    # Buscar columna ASIN (tolerante a mayúsculas/minúsculas/espacios)
     col_asin = [c for c in df_input.columns if str(c).strip().upper() == 'ASIN']
     if not col_asin:
-        raise ValueError(f"❌ ERROR: No se encontró la columna 'ASIN'. Cabeceras presentes: {list(df_input.columns)}")
+        raise ValueError(f"❌ Columna ASIN no encontrada. Cabeceras: {list(df_input.columns)}")
 
     asins = df_input[col_asin[0]].dropna().astype(str).str.strip().tolist()
-    print(f"✅ ASINs cargados para procesar ({len(asins)}): {asins}")
-
-    if not asins:
-        raise ValueError("❌ ERROR: La columna ASIN existe pero no contiene ningún dato.")
+    print(f"✅ ASINs a procesar: {asins}")
 
     results = []
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context()
+        # Configurar Chromium sin las banderas habituales de automatización
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
+        )
+        
+        context = await browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="es-ES",
+            timezone_id="Europe/Madrid"
+        )
+
+        # Ocultar propiedad navigator.webdriver
+        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+
         page = await context.new_page()
 
         for asin in asins:
             print(f"Procesando ASIN: {asin}...")
             data = await scrape_buybox(page, asin)
-            print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']}")
+            print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
             results.append(data)
-            await asyncio.sleep(2)
+            await asyncio.sleep(3) # Pausa entre peticiones
 
         await browser.close()
 
-    # Guardar Excel de salida con Timestamp
+    # Guardar Excel de salida
     now = datetime.now()
     timestamp_str = now.strftime("%Y%m%d_%H%M%S")
     display_date = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -84,7 +173,7 @@ async def main():
     
     os.makedirs(RESULTS_DIR, exist_ok=True)
     pd.DataFrame(results).to_excel(output_path, index=False)
-    print(f"✅ Excel de resultados creado correctamente en: {output_path}")
+    print(f"✅ Excel generado: {output_path}")
 
     # Actualizar index.json
     index_data = []
@@ -106,7 +195,6 @@ async def main():
 
     with open(INDEX_FILE, "w") as f:
         json.dump(index_data, f, indent=2)
-    print(f"✅ Archivo {INDEX_FILE} actualizado con éxito.")
 
 if __name__ == "__main__":
     asyncio.run(main())
