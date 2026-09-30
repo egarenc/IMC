@@ -121,6 +121,7 @@ async def main():
     if not os.path.exists(INPUT_FILE):
         raise FileNotFoundError(f"❌ No existe {INPUT_FILE}")
 
+    # 1. Leer Excel y validar columna
     df_input = pd.read_excel(INPUT_FILE)
     col_asin = [c for c in df_input.columns if str(c).strip().upper() == 'ASIN']
     if not col_asin:
@@ -128,17 +129,11 @@ async def main():
 
     asins = df_input[col_asin[0]].dropna().astype(str).str.strip().tolist()
     print(f"✅ ASINs a procesar: {asins}")
-    # --- LIMPIEZA AUTOMÁTICA DEL ARCHIVO DE ENTRADA ---
-    if os.path.exists(INPUT_FILE):
-        try:
-            os.remove(INPUT_FILE)
-            print(f"🧹 Archivo de entrada {INPUT_FILE} eliminado correctamente tras el procesamiento.")
-        except Exception as e:
-            print(f"⚠️ No se pudo eliminar el archivo de entrada: {e}")
+
     results = []
 
+    # 2. Ejecución del Scraping con Playwright
     async with async_playwright() as p:
-        # Configurar Chromium sin las banderas habituales de automatización
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -147,15 +142,12 @@ async def main():
                 "--disable-setuid-sandbox"
             ]
         )
-        
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
             locale="es-ES",
             timezone_id="Europe/Madrid"
         )
-
-        # Ocultar propiedad navigator.webdriver
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         page = await context.new_page()
@@ -165,11 +157,11 @@ async def main():
             data = await scrape_buybox(page, asin)
             print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
             results.append(data)
-            await asyncio.sleep(3) # Pausa entre peticiones
+            await asyncio.sleep(3)
 
         await browser.close()
 
-    # Guardar Excel de salida
+    # 3. Guardar el nuevo archivo Excel en results/
     now = datetime.now()
     timestamp_str = now.strftime("%Y%m%d_%H%M%S")
     display_date = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -181,7 +173,7 @@ async def main():
     pd.DataFrame(results).to_excel(output_path, index=False)
     print(f"✅ Excel generado: {output_path}")
 
-    # Actualizar index.json
+    # 4. Actualizar index.json
     index_data = []
     if os.path.exists(INDEX_FILE):
         try:
@@ -201,6 +193,14 @@ async def main():
 
     with open(INDEX_FILE, "w") as f:
         json.dump(index_data, f, indent=2)
+
+    # 5. LIMPIEZA AUTOMÁTICA (Último paso tras confirmar la generación del resultado)
+    if os.path.exists(INPUT_FILE):
+        try:
+            os.remove(INPUT_FILE)
+            print(f"🧹 Archivo de entrada {INPUT_FILE} eliminado correctamente tras generar los resultados.")
+        except Exception as e:
+            print(f"⚠️ No se pudo eliminar el archivo de entrada: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())
