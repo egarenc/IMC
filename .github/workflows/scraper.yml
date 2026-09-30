@@ -43,5 +43,5 @@ jobs:
       - name: Guardar cambios y subir resultados a GitHub
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Automated: Generado nuevo informe de Buybox"
-          file_pattern: "results/*"
+          commit_message: "Automated: Generado informe de Buybox y limpiada la carpeta input"
+          file_pattern: "results/* input/*"
