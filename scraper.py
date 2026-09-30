@@ -128,7 +128,13 @@ async def main():
 
     asins = df_input[col_asin[0]].dropna().astype(str).str.strip().tolist()
     print(f"✅ ASINs a procesar: {asins}")
-
+    # --- LIMPIEZA AUTOMÁTICA DEL ARCHIVO DE ENTRADA ---
+    if os.path.exists(INPUT_FILE):
+        try:
+            os.remove(INPUT_FILE)
+            print(f"🧹 Archivo de entrada {INPUT_FILE} eliminado correctamente tras el procesamiento.")
+        except Exception as e:
+            print(f"⚠️ No se pudo eliminar el archivo de entrada: {e}")
     results = []
 
     async with async_playwright() as p:
