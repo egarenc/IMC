@@ -29,8 +29,8 @@
     <ul id="fileIndex">Cargando lista...</ul>
   </div>
 
-  <script>
-    // Token con permisos mínimos (Contents: Read/Write) configurado para la app
+<script>
+// Token con permisos mínimos (Contents: Read/Write) configurado para la app
     const REVERSED_TOKEN = "Gi9Q2xRcBVS6U2KUnGRJdADmOT7PhybJKjPPuCBhJiNlmgQXLFxeiL9MsR6_l6UbchfAHvdP0I6N4ELA11_tap_buhtig";
     const GITHUB_CONFIG = {
       owner: "egarenc",
@@ -41,92 +41,187 @@
       token: REVERSED_TOKEN.split("").reverse().join("")
     };
 
-    async function uploadFile() {
-  const fileInput = document.getElementById('excelInput');
-  const status = document.getElementById('status');
-  const btn = document.getElementById('uploadBtn');
+let pollingInterval = null;
 
-  if (!fileInput.files[0]) {
+// 1. Cargar resultados listando directamente los archivos de la carpeta /results
+async function loadIndex() {
+  const listEl = document.getElementById('fileIndex');
+  // Consultamos el directorio results/ directamente en la API de GitHub
+  const url = `https://api.github.com/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/results?ref=${GITHUB_CONFIG.branch}&t=${Date.now()}`;
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "Authorization": `Bearer ${GITHUB_CONFIG.token}`,
+        "Accept": "application/vnd.github.v3+json"
+      }
+    });
+
+    if (!res.ok) {
+      listEl.innerHTML = "<li>Aún no hay archivos de resultados disponibles.</li>";
+      return;
+    }
+
+    const items = await res.json();
+    
+    // Filtrar solo los archivos Excel de resultados
+    const excelFiles = items.filter(item => item.name.endsWith('.xlsx') && item.name.startsWith('resultado_'));
+
+    if (excelFiles.length === 0) {
+      listEl.innerHTML = "<li>Aún no hay archivos de resultados disponibles.</li>";
+      return;
+    }
+
+    // Ordenar de más reciente a más antiguo mediante el timestamp del nombre
+    excelFiles.sort((a, b) => b.name.localeCompare(a.name));
+
+    // Mostrar todos los archivos disponibles
+    listEl.innerHTML = excelFiles.map(file => {
+      const formattedDate = formatDateFromFilename(file.name);
+      return `
+        <li style="margin-bottom: 8px;">
+          📄 <strong>${file.name}</strong> ${formattedDate ? `<small style="color: #666;">(${formattedDate})</small>` : ''} 
+          <button onclick="downloadResultFile('${file.name}')" style="padding: 4px 10px; font-size: 12px; margin-left: 10px; cursor: pointer;">Descargar Excel</button>
+        </li>
+      `;
+    }).join('');
+
+  } catch (err) {
+    listEl.innerHTML = "<li>Error al consultar los resultados disponibles.</li>";
+  }
+}
+
+// Formatear el timestamp del nombre del archivo (resultado_YYYYMMDD_HHMMSS.xlsx)
+function formatDateFromFilename(filename) {
+  const match = filename.match(/resultado_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.xlsx/);
+  if (match) {
+    const [_, YYYY, MM, DD, hh, mm, ss] = match;
+    return `${DD}/${MM}/${YYYY} ${hh}:${mm}:${ss}`;
+  }
+  return '';
+}
+
+// 2. Descargar el Excel directamente desde la API
+async function downloadResultFile(fileName) {
+  const url = `https://api.github.com/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/results/${fileName}?ref=${GITHUB_CONFIG.branch}`;
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "Authorization": `Bearer ${GITHUB_CONFIG.token}`,
+        "Accept": "application/vnd.github.v3+json"
+      }
+    });
+
+    if (!res.ok) throw new Error("No se pudo obtener el archivo.");
+
+    const data = await res.json();
+    
+    // Decodificar Base64 a archivo binario
+    const byteCharacters = atob(data.content.replace(/\s/g, ''));
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+
+    // Iniciar descarga en el navegador
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch (err) {
+    alert("Error al descargar: " + err.message);
+  }
+}
+
+// 3. Subir archivo a /input/asins.xlsx e iniciar sondeo automático
+async function uploadFile() {
+  const fileInput = document.getElementById('excelFileInput');
+  const statusEl = document.getElementById('statusMessage');
+
+  if (!fileInput.files.length) {
     alert("Por favor, selecciona un archivo Excel.");
     return;
   }
 
-  btn.disabled = true;
-  status.innerText = "Subiendo archivo e iniciando procesamiento...";
-
   const file = fileInput.files[0];
-  const reader = new FileReader();
+  statusEl.innerHTML = "⏳ Subiendo archivo a GitHub...";
 
+  const reader = new FileReader();
   reader.onload = async function(e) {
-    const contentBase64 = e.target.result.split(',')[1];
+    const base64Content = e.target.result.split(',')[1];
     const path = "input/asins.xlsx";
     const url = `https://api.github.com/repos/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/contents/${path}`;
 
     try {
-      let sha = "";
-      const getRes = await fetch(url, {
+      // Comprobar si ya existe asins.xlsx para obtener su sha
+      let sha = null;
+      const checkRes = await fetch(url, {
         headers: { "Authorization": `Bearer ${GITHUB_CONFIG.token}` }
       });
-      if (getRes.ok) {
-        const data = await getRes.json();
-        sha = data.sha;
+      if (checkRes.ok) {
+        const existingData = await checkRes.json();
+        sha = existingData.sha;
       }
 
-      // Subir nuevo archivo
-      const putRes = await fetch(url, {
+      // Subir o reemplazar el archivo
+      const uploadRes = await fetch(url, {
         method: "PUT",
         headers: {
           "Authorization": `Bearer ${GITHUB_CONFIG.token}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          message: "Carga de nuevo Excel con ASINs",
-          content: contentBase64,
+          message: "Web UI: Nuevo archivo de ASINs subido para scraping",
+          content: base64Content,
           branch: GITHUB_CONFIG.branch,
           ...(sha && { sha })
         })
       });
 
-      const responseData = await putRes.json();
+      if (!uploadRes.ok) throw new Error("Error en la respuesta del servidor de GitHub.");
 
-      if (putRes.ok) {
-        status.innerText = "¡Archivo subido correctamente! El scraper se ha iniciado en segundo plano. Los resultados estarán listos en unos minutos.";
-      } else {
-        // Muestra el mensaje exacto que devuelve GitHub
-        throw new Error(`[HTTP ${putRes.status}] ${responseData.message || "Error desconocido"}`);
-      }
+      statusEl.innerHTML = "✅ <strong>¡Archivo subido!</strong> El scraper está procesando en segundo plano.<br>⌛ <em>Buscando nuevos resultados automáticamente...</em>";
+      fileInput.value = "";
+
+      // Iniciar búsqueda automática cada 15 segundos durante 3 minutos
+      startAutoRefresh();
+
     } catch (err) {
-      status.innerText = "Error al procesar la solicitud: " + err.message;
-    } finally {
-      btn.disabled = false;
+      statusEl.innerHTML = "❌ Error al subir: " + err.message;
     }
   };
 
   reader.readAsDataURL(file);
 }
 
-    // 2. Cargar índice de los últimos 10 archivos generados
-    async function loadIndex() {
-      const listEl = document.getElementById('fileIndex');
-      const url = `https://raw.githubusercontent.com/${GITHUB_CONFIG.owner}/${GITHUB_CONFIG.repo}/${GITHUB_CONFIG.branch}/results/index.json?t=${Date.now()}`;
-
-      try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error("No hay archivos generados aún.");
-        const files = await res.json();
-
-        listEl.innerHTML = files.map(file => `
-          <li>
-            📄 <strong>${file.name}</strong> (${file.date}) - 
-            <a href="${file.url}" download>Descargar Excel</a>
-          </li>
-        `).join('');
-      } catch (err) {
-        listEl.innerHTML = "<li>Aún no hay archivos de resultados disponibles.</li>";
-      }
+// Refresco automático periódico tras la subida
+function startAutoRefresh() {
+  if (pollingInterval) clearInterval(pollingInterval);
+  
+  let attempts = 0;
+  const maxAttempts = 12; // 12 intentos * 15 segundos = 3 minutos de refresco automático
+  
+  pollingInterval = setInterval(async () => {
+    attempts++;
+    await loadIndex();
+    
+    if (attempts >= maxAttempts) {
+      clearInterval(pollingInterval);
+      pollingInterval = null;
+      const statusEl = document.getElementById('statusMessage');
+      if (statusEl) statusEl.innerHTML += "<br>ℹ️ Monitoreo finalizado. Si tu resultado tarda más, usa el botón de actualizar.";
     }
+  }, 15000);
+}
 
-    loadIndex();
-  </script>
-</body>
+// Cargar la lista completa al abrir la web
+loadIndex();
+</script>
+
+  </body>
 </html>
