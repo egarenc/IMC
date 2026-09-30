@@ -12,7 +12,6 @@ INDEX_FILE = os.path.join(RESULTS_DIR, "index.json")
 async def scrape_buybox(page, asin):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
-        # User-Agent para minimizar bloqueos iniciales
         await page.set_extra_http_headers({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept-Language": "es-ES,es;q=0.9"
@@ -21,9 +20,8 @@ async def scrape_buybox(page, asin):
         response = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
         
         if response.status != 200:
-            return {"ASIN": asin, "Estado": f"Error HTTP {response.status}", "Precio": "", "Vendedor": "", "Disponibilidad": ""}
+            return {"ASIN": asin, "Estado": f"Error HTTP {response.status}", "Precio": "N/D", "Vendedor": "N/D", "Disponibilidad": "N/D"}
 
-        # Selectores comunes de Buybox en Amazon
         price = await page.locator("#corePrice_feature_div .a-offscreen, #priceblock_ourprice, .a-price .a-offscreen").first.text_content(timeout=5000)
         seller = await page.locator("#merchant-info, #sellerProfileTriggerId").first.text_content(timeout=5000)
         availability = await page.locator("#availability").first.text_content(timeout=5000)
@@ -36,16 +34,29 @@ async def scrape_buybox(page, asin):
             "Disponibilidad": availability.strip() if availability else "N/D"
         }
     except Exception as e:
-        return {"ASIN": asin, "Estado": f"Error: {str(e)}", "Precio": "", "Vendedor": "", "Disponibilidad": ""}
+        return {"ASIN": asin, "Estado": f"Error: {str(e)}", "Precio": "N/D", "Vendedor": "N/D", "Disponibilidad": "N/D"}
 
 async def main():
+    print("--- INICIANDO PROCESO DE SCRAPING ---")
+    print(f"Directorio actual: {os.getcwd()}")
+    
     if not os.path.exists(INPUT_FILE):
-        print("No se encontró el archivo de entrada.")
-        return
+        raise FileNotFoundError(f"❌ ERROR CRÍTICO: No existe el archivo {INPUT_FILE}")
 
-    # Leer ASINs del Excel
+    # Leer Excel
     df_input = pd.read_excel(INPUT_FILE)
-    asins = df_input['ASIN'].dropna().astype(str).tolist()
+    print(f"Cabeceras detectadas en el Excel: {list(df_input.columns)}")
+
+    # Buscar columna ASIN (tolerante a mayúsculas/minúsculas/espacios)
+    col_asin = [c for c in df_input.columns if str(c).strip().upper() == 'ASIN']
+    if not col_asin:
+        raise ValueError(f"❌ ERROR: No se encontró la columna 'ASIN'. Cabeceras presentes: {list(df_input.columns)}")
+
+    asins = df_input[col_asin[0]].dropna().astype(str).str.strip().tolist()
+    print(f"✅ ASINs cargados para procesar ({len(asins)}): {asins}")
+
+    if not asins:
+        raise ValueError("❌ ERROR: La columna ASIN existe pero no contiene ningún dato.")
 
     results = []
 
@@ -55,9 +66,11 @@ async def main():
         page = await context.new_page()
 
         for asin in asins:
-            data = await scrape_buybox(page, asin.strip())
+            print(f"Procesando ASIN: {asin}...")
+            data = await scrape_buybox(page, asin)
+            print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']}")
             results.append(data)
-            await asyncio.sleep(2) # Pausa preventiva entre peticiones
+            await asyncio.sleep(2)
 
         await browser.close()
 
@@ -71,8 +84,9 @@ async def main():
     
     os.makedirs(RESULTS_DIR, exist_ok=True)
     pd.DataFrame(results).to_excel(output_path, index=False)
+    print(f"✅ Excel de resultados creado correctamente en: {output_path}")
 
-    # Actualizar el índice JSON con los últimos 10 archivos
+    # Actualizar index.json
     index_data = []
     if os.path.exists(INDEX_FILE):
         try:
@@ -87,12 +101,12 @@ async def main():
         "url": f"./results/{output_filename}"
     }
 
-    # Insertar al inicio y mantener solo los últimos 10
     index_data.insert(0, new_entry)
     index_data = index_data[:10]
 
     with open(INDEX_FILE, "w") as f:
         json.dump(index_data, f, indent=2)
+    print(f"✅ Archivo {INDEX_FILE} actualizado con éxito.")
 
 if __name__ == "__main__":
     asyncio.run(main())
