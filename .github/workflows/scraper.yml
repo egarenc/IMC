@@ -2,8 +2,10 @@ name: Ejecutar Scraper de Buybox
 
 on:
   push:
+    branches:
+      - main
     paths:
-      - 'input/asins.xlsx'
+      - 'input/**'
   workflow_dispatch:
 
 permissions:
@@ -11,7 +13,7 @@ permissions:
 
 jobs:
   scrape:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04 # Fijado a Ubuntu 22.04 para compatibilidad de paquetes de Playwright
 
     steps:
       - name: Checkout del repositorio
@@ -30,7 +32,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Instalar navegadores de Playwright
+      - name: Instalar navegadores de Playwright (Python)
         run: |
           python -m playwright install chromium --with-deps
 
@@ -38,17 +40,8 @@ jobs:
         run: |
           python scraper.py
 
-      - name: Verificar archivos generados
-        run: |
-          echo "=== Contenido de la carpeta results ==="
-          ls -la results/ || echo "Carpeta results no existe"
-          echo "=== Estado de Git ==="
-          git status
-
       - name: Guardar cambios y subir resultados a GitHub
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f results/
-          git commit -m "Automated: Generado nuevo informe de Buybox" || echo "No hay cambios para hacer commit"
-          git push origin ${{ github.ref_name }}
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Automated: Generado nuevo informe de Buybox"
+          file_pattern: "results/*"
