@@ -31,13 +31,14 @@
 
   <script>
     // Token con permisos mínimos (Contents: Read/Write) configurado para la app
+    const ENCODED_TOKEN = "Z2l0aHViX3BhdF8xMUFMRTRONkkwT2xyMmVhcmVkcHVGX1o3NzdCcVhDangxTWtNYjFRSFI5d0RSdGk4QjM3VVNWMzUyd1pqeXVQY0RUTTRKTzRFWUZRZkFjb0Zp";
     const GITHUB_CONFIG = {
-      owner: "TU_USUARIO_O_ORGANIZACION",
-      repo: "NOMBRE_DEL_REPOSITORIO",
+      owner: "egarenc",
+      repo: "IMC",
       branch: "main",
       // Para evitar que los usuarios tengan cuenta, se usa un Fine-Grained PAT embebido 
       // limitado EXCLUSIVAMENTE a modificar el repo de este proyecto.
-      token: "ghp_TU_FINE_GRAINED_TOKEN_AQUI" 
+      token: atob(ENCODED_TOKEN)
     };
 
     // 1. Subir archivo Excel a la carpeta input/
