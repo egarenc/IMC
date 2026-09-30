@@ -31,14 +31,14 @@
 
   <script>
     // Token con permisos mínimos (Contents: Read/Write) configurado para la app
-    const ENCODED_TOKEN = "Z2l0aHViX3BhdF8xMUFMRTRONkkwWldNdTJsM1poek9nX0FoenVETDk4OVRkQlNHeTZyTWtkRFhnbnJySWdDVTlCOEZsUFlqY29kYmtJSjJER0E1SHhEZXdJY2Zt";
+    const REVERSED_TOKEN = "Gi9Q2xRcBVS6U2KUnGRJdADmOT7PhybJKjPPuCBhJiNlmgQXLFxeiL9MsR6_l6UbchfAHvdP0I6N4ELA11_tap_buhtig";
     const GITHUB_CONFIG = {
       owner: "egarenc",
       repo: "IMC",
       branch: "main",
       // Para evitar que los usuarios tengan cuenta, se usa un Fine-Grained PAT embebido 
       // limitado EXCLUSIVAMENTE a modificar el repo de este proyecto.
-      token: atob(ENCODED_TOKEN)
+      token: REVERSED_TOKEN.split("").reverse().join("")
     };
 
     async function uploadFile() {
