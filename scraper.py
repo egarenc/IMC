@@ -4,26 +4,63 @@ import asyncio
 from datetime import datetime
 import pandas as pd
 from playwright.async_api import async_playwright
+from amazoncaptcha import AmazonCaptcha
 
 INPUT_FILE = "input/asins.xlsx"
 RESULTS_DIR = "results"
 INDEX_FILE = os.path.join(RESULTS_DIR, "index.json")
 
+async def solve_amazon_captcha_if_present(page):
+    """Detecta si Amazon muestra la pantalla de CAPTCHA y lo resuelve automáticamente."""
+    try:
+        # Selector de la imagen del CAPTCHA en el formulario de Amazon
+        captcha_img = page.locator("form[action='/errors/validateCaptcha'] img")
+        if await captcha_img.count() > 0:
+            print("🧩 CAPTCHA de imagen detectado. Intentando resolver con IA local...")
+            img_url = await captcha_img.get_attribute("src")
+            
+            if img_url:
+                # La librería descifra el texto de la imagen
+                captcha = AmazonCaptcha.from_driver_url(img_url)
+                solution = captcha.solve()
+                print(f"🔑 Solución calculada por amazoncaptcha: {solution}")
+
+                if solution and solution != "Not solved":
+                    # Escribir solución en el input de la página
+                    await page.fill("#captchacharacters", solution)
+                    # Pulsar el botón de envío
+                    await page.click("button[type='submit']")
+                    await page.wait_for_load_state("domcontentloaded")
+                    await asyncio.sleep(2)
+                    print("✅ Formulario de CAPTCHA enviado.")
+                    return True
+                else:
+                    print("❌ La librería no pudo descifrar la imagen del CAPTCHA.")
+    except Exception as e:
+        print(f"⚠️ Excepción al intentar resolver el CAPTCHA: {e}")
+    return False
+
 async def scrape_buybox(page, asin):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
         response = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        await asyncio.sleep(2) # Pausa para renderizado JS
+        await asyncio.sleep(2)
 
-        # 1. Comprobar si Amazon devolvió un CAPTCHA
+        # 1. Verificar e intentar resolver CAPTCHA de imagen si aparece
+        captcha_solved = await solve_amazon_captcha_if_present(page)
+        if captcha_solved:
+            await page.wait_for_load_state("domcontentloaded")
+            await asyncio.sleep(2)
+
+        # 2. Comprobar si seguimos bloqueados
         title = await page.title()
         content = await page.content()
         
-        if "captcha" in title.lower() or "robot" in title.lower() or "validateCaptcha" in content or "algo ha ido mal" in content.lower():
-            print(f"⚠️ CAPTCHA/Bloqueo detectado para ASIN: {asin}")
+        if "captcha" in title.lower() or "validateCaptcha" in content:
+            print(f"⚠️ El CAPTCHA no se pudo resolver para el ASIN: {asin}")
             return {
                 "ASIN": asin,
-                "Estado": "Bloqueado (CAPTCHA de Amazon)",
+                "Estado": "Bloqueado (CAPTCHA no resuelto)",
                 "Precio": "N/D",
                 "Vendedor": "N/D",
                 "Disponibilidad": "N/D"
@@ -42,7 +79,7 @@ async def scrape_buybox(page, asin):
         seller_val = "N/D"
         avail_val = "N/D"
 
-        # 2. Extracción de Precio con selectores alternativos
+        # 3. Extracción de Precio con selectores alternativos
         try:
             price_selectors = [
                 "#corePrice_feature_div .a-offscreen",
@@ -61,7 +98,7 @@ async def scrape_buybox(page, asin):
         except Exception:
             pass
 
-        # 3. Extracción de Vendedor con selectores alternativos
+        # 4. Extracción de Vendedor con selectores alternativos
         try:
             seller_selectors = [
                 "#merchant-info",
@@ -79,7 +116,7 @@ async def scrape_buybox(page, asin):
         except Exception:
             pass
 
-        # 4. Extracción de Disponibilidad
+        # 5. Extracción de Disponibilidad
         try:
             avail_selectors = [
                 "#availability",
@@ -121,7 +158,6 @@ async def main():
     if not os.path.exists(INPUT_FILE):
         raise FileNotFoundError(f"❌ No existe {INPUT_FILE}")
 
-    # 1. Leer Excel y validar columna
     df_input = pd.read_excel(INPUT_FILE)
     col_asin = [c for c in df_input.columns if str(c).strip().upper() == 'ASIN']
     if not col_asin:
@@ -132,7 +168,6 @@ async def main():
 
     results = []
 
-    # 2. Ejecución del Scraping con Playwright
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -142,12 +177,14 @@ async def main():
                 "--disable-setuid-sandbox"
             ]
         )
+        
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
             locale="es-ES",
             timezone_id="Europe/Madrid"
         )
+
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         page = await context.new_page()
@@ -161,7 +198,7 @@ async def main():
 
         await browser.close()
 
-    # 3. Guardar el nuevo archivo Excel en results/
+    # Guardar Excel de salida
     now = datetime.now()
     timestamp_str = now.strftime("%Y%m%d_%H%M%S")
     display_date = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -173,7 +210,7 @@ async def main():
     pd.DataFrame(results).to_excel(output_path, index=False)
     print(f"✅ Excel generado: {output_path}")
 
-    # 4. Actualizar index.json
+    # Actualizar index.json
     index_data = []
     if os.path.exists(INDEX_FILE):
         try:
@@ -194,7 +231,7 @@ async def main():
     with open(INDEX_FILE, "w") as f:
         json.dump(index_data, f, indent=2)
 
-    # 5. LIMPIEZA AUTOMÁTICA (Último paso tras confirmar la generación del resultado)
+    # Limpieza automática del archivo de entrada
     if os.path.exists(INPUT_FILE):
         try:
             os.remove(INPUT_FILE)
