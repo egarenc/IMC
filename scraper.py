@@ -85,13 +85,24 @@ async def scrape_buybox(page, asin, output_base_name):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
         print(f"🔗 Cargando ASIN {asin} a través de Webshare Proxy...")
-        response = await page.goto(url, timeout=35000, wait_until="domcontentloaded")
-        await asyncio.sleep(random.uniform(2.0, 4.0))
+        
+        # 1. Cambiamos wait_until a 'commit' para responder en cuanto llegue el HTML del servidor
+        try:
+            response = await page.goto(url, timeout=30000, wait_until="commit")
+            # Damos 10s extra para que el renderizado de DOM avance
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                print("⏱️ La carga completa del DOM tardó más de lo esperado, procesando el HTML disponible...")
+        except Exception as goto_error:
+            print(f"⚠️ Error/Timeout en la navegación principal a {asin}: {goto_error}")
 
-        # 1. Aceptar cookies
+        await asyncio.sleep(random.uniform(2.5, 4.5))
+
+        # 2. Aceptar cookies
         await accept_cookies_if_present(page)
 
-        # 2. Gestionar desafíos intermedios
+        # 3. Gestionar desafíos intermedios
         await handle_button_challenge_if_present(page)
         await solve_amazon_captcha_if_present(page)
 
@@ -120,16 +131,6 @@ async def scrape_buybox(page, asin, output_base_name):
             return {
                 "ASIN": asin,
                 "Estado": f"Bloqueado ({block_type})",
-                "Precio": "N/D",
-                "Vendedor": "N/D",
-                "Disponibilidad": "N/D",
-                "URL_Final": current_url
-            }
-
-        if response and response.status != 200:
-            return {
-                "ASIN": asin,
-                "Estado": f"Error HTTP {response.status}",
                 "Precio": "N/D",
                 "Vendedor": "N/D",
                 "Disponibilidad": "N/D",
@@ -255,9 +256,9 @@ async def main():
 
     # Configuración del proxy de Webshare
     proxy_config = {
-        "server": PROXY_SERVER,
-        "username": PROXY_USERNAME,
-        "password": PROXY_PASSWORD
+        "server": 31.59.20.176,
+        "username": lqfkvxjs,
+        "password": o114si1p43m
     }
 
     async with Stealth().use_async(async_playwright()) as p:
