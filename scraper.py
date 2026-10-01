@@ -20,18 +20,6 @@ PROXY_USERNAME = os.environ.get("PROXY_USERNAME", "lqfkvxjs")
 PROXY_PASSWORD = os.environ.get("PROXY_PASSWORD", "o114si1p43m")
 
 
-async def block_unnecessary_resources(route):
-    """Bloquea recursos pesados para no saturar la conexión del proxy."""
-    resource_type = route.request.resource_type
-    url = route.request.url.lower()
-    
-    # Permitimos scripts y documentos HTML pero bloqueamos multimedia pesada
-    if resource_type in ["image", "media", "font"] or "ads" in url or "analytics" in url:
-        await route.abort()
-    else:
-        await route.continue_()
-
-
 async def accept_cookies_if_present(page):
     """Acepta el banner de cookies si aparece."""
     try:
@@ -91,52 +79,83 @@ async def solve_amazon_captcha_if_present(page):
 
 
 async def save_diagnostic_data(page, asin, output_base_name, prefix):
-    """Guarda captura PNG e independientemente el archivo HTML por si falla el renderizado."""
+    """Guarda captura PNG y archivo HTML de diagnóstico solo si contienen datos."""
     os.makedirs(RESULTS_DIR, exist_ok=True)
     base_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}_{prefix}")
     
-    # 1. Intentar guardar volcado HTML (no depende de renderizar gráficos)
     try:
         html_content = await page.content()
-        html_path = f"{base_path}.html"
-        with open(html_path, "w", encoding="utf-8") as f:
-            f.write(html_content)
-        print(f"📄 Volcado HTML de diagnóstico guardado en: {html_path}")
+        if len(html_content) > 300:
+            html_path = f"{base_path}.html"
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            print(f"📄 Volcado HTML guardado ({len(html_content)} bytes): {html_path}")
+        else:
+            print("⚠️ El HTML recuperado está prácticamente vacío, no se guardará.")
     except Exception as err:
         print(f"⚠️ No se pudo guardar el HTML de diagnóstico: {err}")
 
-    # 2. Intentar captura PNG con timeout corto
     try:
         screenshot_path = f"{base_path}.png"
-        await page.screenshot(path=screenshot_path, full_page=False, timeout=4000)
+        await page.screenshot(path=screenshot_path, full_page=False, timeout=5000)
         print(f"📸 Captura guardada en: {screenshot_path}")
-    except Exception:
-        print("⚠️ No se pudo renderizar la captura PNG (Proxy lento), consulta el archivo .html generado.")
+    except Exception as err:
+        print(f"⚠️ No se pudo renderizar la captura PNG: {err}")
 
 
 async def scrape_buybox(page, asin, output_base_name):
     url = f"https://www.amazon.es/dp/{asin}"
-    try:
-        print(f"🔗 Cargando ASIN {asin} a través de Webshare Proxy...")
-        
-        # Carga ultra rápida sin esperar a recursos secundarios
+    
+    # Intentar cargar la página (hasta 2 intentos por ASIN)
+    response = None
+    for attempt in range(1, 3):
         try:
-            await page.goto(url, timeout=20000, wait_until="commit")
+            print(f"🔗 [Intento {attempt}/2] Cargando ASIN {asin} a través del Proxy...")
+            response = await page.goto(url, timeout=25000, wait_until="domcontentloaded")
             await asyncio.sleep(2.0)
+            
+            # Verificar si se recibió contenido
+            content = await page.content()
+            if len(content) > 500:
+                break
+            else:
+                print(f"⚠️ Intento {attempt}: Respuesta vacía o incompleta ({len(content)} bytes). Reintentando...")
+                await asyncio.sleep(2.0)
         except Exception as goto_error:
-            print(f"⚠ Tiempo de espera en respuesta inicial ({goto_error}), procesando HTML...")
+            print(f"⚠️ Error de red en intento {attempt}: {goto_error}")
+            await asyncio.sleep(2.0)
+
+    try:
+        current_url = page.url
+        title = await page.title()
+        content = await page.content()
+        content_lower = content.lower()
+        status_code = response.status if response else "Sin Respuesta"
+
+        print(f"📊 Estado HTTP recibido: {status_code} | Longitud HTML: {len(content)} bytes")
+
+        # Verificar si la página devolvió respuesta vacía/fallo de proxy
+        if len(content) < 500 or "about:blank" in current_url:
+            print(f"❌ La conexión con la IP Proxy colapsó o Amazon la rechazó.")
+            return {
+                "ASIN": asin,
+                "Estado": "Error: Conexión caída / Proxy rechazado",
+                "Precio": "N/D",
+                "Vendedor": "N/D",
+                "Disponibilidad": "N/D",
+                "URL_Final": current_url
+            }
 
         # Manejo de cookies, captcha y desafíos
         await accept_cookies_if_present(page)
         await handle_button_challenge_if_present(page)
         await solve_amazon_captcha_if_present(page)
 
-        current_url = page.url
-        title = await page.title()
+        # Actualizar contenido tras resolver desafíos
         content = await page.content()
         content_lower = content.lower()
 
-        # Comprobar si fue bloqueado
+        # Comprobar si fue bloqueado por Amazon
         is_captcha = "captcha" in title.lower() or "validatecaptcha" in content_lower
         is_button_block = "haz click en el botón" in content_lower or "seguir comprando" in content_lower
         is_home_redirect = current_url.rstrip('/') == "https://www.amazon.es" or "ref=nav_logo" in current_url
@@ -299,9 +318,6 @@ async def main():
         )
 
         page = await context.new_page()
-        
-        # Interceptamos y bloqueamos recursos no esenciales para optimizar el proxy
-        await page.route("**/*", block_unnecessary_resources)
 
         for asin in asins:
             print(f"Procesando ASIN: {asin}...")
@@ -309,7 +325,7 @@ async def main():
             print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
             results.append(data)
             
-            wait_time = random.uniform(3.0, 6.0)
+            wait_time = random.uniform(3.0, 5.0)
             print(f"⏱ Esperando {wait_time:.2f} segundos antes del siguiente ASIN...")
             await asyncio.sleep(wait_time)
 
