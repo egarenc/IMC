@@ -16,9 +16,9 @@ INDEX_FILE = os.path.join(RESULTS_DIR, "index.json")
 # CONFIGURACIÓN DE PROXY WEBSHARE
 # Puedes definirlos en GitHub Secrets o poner los datos directamente aquí:
 # --------------------------------------------------------------------------
-PROXY_SERVER = os.environ.get("PROXY_SERVER", "http://p.webshare.io:80")
-PROXY_USERNAME = os.environ.get("PROXY_USERNAME", "TU_USUARIO_WEBSHARE")
-PROXY_PASSWORD = os.environ.get("PROXY_PASSWORD", "TU_PASSWORD_WEBSHARE")
+PROXY_SERVER = os.environ.get("PROXY_SERVER", "http://31.59.20.176:6754")
+PROXY_USERNAME = os.environ.get("PROXY_USERNAME", "lqfkvxjs")
+PROXY_PASSWORD = os.environ.get("PROXY_PASSWORD", "o114si1p43m")
 
 
 async def accept_cookies_if_present(page):
@@ -256,9 +256,9 @@ async def main():
 
     # Configuración del proxy de Webshare
     proxy_config = {
-        "server": 31.59.20.176,
-        "username": lqfkvxjs,
-        "password": o114si1p43m
+        "server": PROXY_SERVER,
+        "username": PROXY_USERNAME,
+        "password": PROXY_PASSWORD
     }
 
     async with Stealth().use_async(async_playwright()) as p:
