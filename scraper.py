@@ -14,7 +14,6 @@ INDEX_FILE = os.path.join(RESULTS_DIR, "index.json")
 
 # --------------------------------------------------------------------------
 # CONFIGURACIÓN DE PROXY WEBSHARE
-# Puedes definirlos en GitHub Secrets o poner los datos directamente aquí:
 # --------------------------------------------------------------------------
 PROXY_SERVER = os.environ.get("PROXY_SERVER", "http://31.59.20.176:6754")
 PROXY_USERNAME = os.environ.get("PROXY_USERNAME", "lqfkvxjs")
@@ -31,6 +30,7 @@ async def accept_cookies_if_present(page):
             print("🍪 Banner de cookies aceptado.")
     except Exception:
         pass
+
 
 async def handle_button_challenge_if_present(page):
     """Gestiona desafíos de botón interactivo si aparecen."""
@@ -51,8 +51,9 @@ async def handle_button_challenge_if_present(page):
                     await asyncio.sleep(random.uniform(3.0, 5.0))
                     return True
     except Exception as e:
-        print(f"⚠️️ Error al gestionar el desafío de botón: {e}")
+        print(f"⚠ Error al gestionar el desafío de botón: {e}")
     return False
+
 
 async def solve_amazon_captcha_if_present(page):
     """Detecta e intenta resolver CAPTCHA de imagen si aparece."""
@@ -81,20 +82,31 @@ async def solve_amazon_captcha_if_present(page):
         print(f"⚠️ Excepción al intentar resolver el CAPTCHA: {e}")
     return False
 
+
+async def save_screenshot(page, filepath):
+    """Guarda una captura de pantalla del viewport actual de forma segura."""
+    try:
+        os.makedirs(RESULTS_DIR, exist_ok=True)
+        # Usamos full_page=False para evitar que el script colapse si la página no cargó completa
+        await page.screenshot(path=filepath, full_page=False, timeout=8000)
+        print(f"📸 Captura guardada en: {filepath}")
+    except Exception as err:
+        print(f"⚠️ No se pudo guardar la captura de pantalla ({filepath}): {err}")
+
+
 async def scrape_buybox(page, asin, output_base_name):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
         print(f"🔗 Cargando ASIN {asin} a través de Webshare Proxy...")
         
-        # Carga inicial de la página
+        # 1. Carga con wait_until='commit' para evitar colgarse si el proxy es lento
         try:
-            await page.goto(url, timeout=35000, wait_until="domcontentloaded")
+            await page.goto(url, timeout=25000, wait_until="commit")
+            await asyncio.sleep(3.0)
         except Exception as goto_error:
-            print(f"⚠️️ Tiempo de espera en lectura del DOM, intentando extraer con lo cargado...")
+            print(f"⚠ Tiempo de espera en respuesta inicial, analizando lo recibido...")
 
-        await asyncio.sleep(random.uniform(2.0, 3.5))
-
-        # 1. Aceptar cookies y superar bloqueos
+        # 2. Manejo de cookies, captcha y desafíos
         await accept_cookies_if_present(page)
         await handle_button_challenge_if_present(page)
         await solve_amazon_captcha_if_present(page)
@@ -104,7 +116,7 @@ async def scrape_buybox(page, asin, output_base_name):
         content = await page.content()
         content_lower = content.lower()
 
-        # Comprobar si hay bloqueo por CAPTCHA o Redirección
+        # Comprobar bloqueos
         is_captcha = "captcha" in title.lower() or "validatecaptcha" in content_lower
         is_button_block = "haz click en el botón" in content_lower or "seguir comprando" in content_lower
         is_home_redirect = current_url.rstrip('/') == "https://www.amazon.es" or "ref=nav_logo" in current_url
@@ -113,12 +125,8 @@ async def scrape_buybox(page, asin, output_base_name):
             block_type = "CAPTCHA" if is_captcha else ("Redirección Home" if is_home_redirect else "Botón Interactivo")
             print(f"⚠️ ASIN {asin} bloqueado o redirigido ({block_type}).")
             
-            os.makedirs(RESULTS_DIR, exist_ok=True)
-            screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}.png")
-            try:
-                await page.screenshot(path=screenshot_path, full_page=True)
-            except Exception:
-                pass
+            screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}_blocked.png")
+            await save_screenshot(page, screenshot_path)
 
             return {
                 "ASIN": asin,
@@ -129,15 +137,21 @@ async def scrape_buybox(page, asin, output_base_name):
                 "URL_Final": current_url
             }
 
-        # 2. Esperar explícitamente hasta 8s a que se renderice algún contenedor de precio
-        print("⏳ Esperando que se renderice el precio/buybox...")
+        # 3. Pequeño scroll para forzar la carga de componentes lazy-loaded
+        try:
+            await page.evaluate("window.scrollBy(0, 350)")
+            await asyncio.sleep(1.5)
+        except Exception:
+            pass
+
+        # 4. Esperar hasta 6s si aparece el contenedor del precio
         try:
             await page.wait_for_selector(
-                "#corePrice_feature_div, #corePriceDisplay_desktop_feature_div, .apexPriceToPay, #priceblock_ourprice, #merchant-info, #availability",
-                timeout=8000
+                "#corePrice_feature_div, #corePriceDisplay_desktop_feature_div, .apexPriceToPay, #priceblock_ourprice, #merchant-info",
+                timeout=6000
             )
         except Exception:
-            print("⚠️ No apareció el contenedor principal de precio tras 8s.")
+            pass
 
         price_val = "N/D"
         seller_val = "N/D"
@@ -194,7 +208,7 @@ async def scrape_buybox(page, asin, output_base_name):
         avail_selectors = [
             "#availability",
             "#outOfStock",
-            "#glow-ingress-block", # Muestra la ubicación actual (ej: "Enviar a España")
+            "#glow-ingress-block",
             "#availability span"
         ]
         for sel in avail_selectors:
@@ -214,14 +228,8 @@ async def scrape_buybox(page, asin, output_base_name):
         elif "no disponible" in content_lower or "currently unavailable" in content_lower:
             estado = "Producto No Disponible"
         else:
-            # Si no hay precio, guardamos una captura de pantalla para diagnóstico
-            os.makedirs(RESULTS_DIR, exist_ok=True)
             screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}_no_buybox.png")
-            try:
-                await page.screenshot(path=screenshot_path, full_page=True)
-                print(f"📸 Captura de diagnóstico guardada en: {screenshot_path}")
-            except Exception:
-                pass
+            await save_screenshot(page, screenshot_path)
             estado = "Sin Buybox / Layout alternativo"
 
         return {
@@ -244,6 +252,7 @@ async def scrape_buybox(page, asin, output_base_name):
             "URL_Final": page.url if page else url
         }
 
+
 async def main():
     print("--- INICIANDO PROCESO DE SCRAPING CON PROXY WEBSHARE ---")
     if not os.path.exists(INPUT_FILE):
@@ -264,7 +273,6 @@ async def main():
 
     results = []
 
-    # Configuración del proxy de Webshare
     proxy_config = {
         "server": PROXY_SERVER,
         "username": PROXY_USERNAME,
@@ -281,7 +289,6 @@ async def main():
             ]
         )
         
-        # Iniciar contexto con el proxy de Webshare integrado
         context = await browser.new_context(
             proxy=proxy_config,
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -298,8 +305,8 @@ async def main():
             print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
             results.append(data)
             
-            wait_time = random.uniform(4.0, 9.0)
-            print(f"⏱️️ Esperando {wait_time:.2f} segundos antes del siguiente ASIN...")
+            wait_time = random.uniform(4.0, 8.0)
+            print(f"⏱ Esperando {wait_time:.2f} segundos antes del siguiente ASIN...")
             await asyncio.sleep(wait_time)
 
         await browser.close()
@@ -340,6 +347,7 @@ async def main():
             print(f"🧹 Archivo {INPUT_FILE} eliminado tras procesar.")
         except Exception as e:
             print(f"⚠️ No se pudo eliminar el archivo de entrada: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
