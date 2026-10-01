@@ -1,9 +1,11 @@
 import os
 import json
 import asyncio
+import random
 from datetime import datetime
 import pandas as pd
 from playwright.async_api import async_playwright
+from playwright_stealth import stealth_async
 from amazoncaptcha import AmazonCaptcha
 
 INPUT_FILE = "input/asins.xlsx"
@@ -16,7 +18,7 @@ async def accept_cookies_if_present(page):
         cookie_btn = page.locator("#sp-cc-accept")
         if await cookie_btn.count() > 0 and await cookie_btn.is_visible():
             await cookie_btn.click()
-            await asyncio.sleep(1)
+            await asyncio.sleep(random.uniform(1.0, 2.0))
             print("🍪 Banner de cookies aceptado.")
     except Exception:
         pass
@@ -36,9 +38,10 @@ async def solve_amazon_captcha_if_present(page):
 
                 if solution and solution != "Not solved":
                     await page.fill("#captchacharacters", solution)
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
                     await page.click("button[type='submit']")
                     await page.wait_for_load_state("domcontentloaded")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(random.uniform(2.0, 3.5))
                     print("✅ Formulario de CAPTCHA enviado.")
                     return True
                 else:
@@ -51,7 +54,7 @@ async def scrape_buybox(page, asin):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
         response = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-        await asyncio.sleep(2)
+        await asyncio.sleep(random.uniform(2.0, 4.0))
 
         # 1. Aceptar banner de cookies si existe
         await accept_cookies_if_present(page)
@@ -60,7 +63,7 @@ async def scrape_buybox(page, asin):
         captcha_solved = await solve_amazon_captcha_if_present(page)
         if captcha_solved:
             await page.wait_for_load_state("domcontentloaded")
-            await asyncio.sleep(2)
+            await asyncio.sleep(random.uniform(2.0, 3.5))
 
         # 3. Comprobar si seguimos bloqueados
         title = await page.title()
@@ -218,13 +221,20 @@ async def main():
         await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
         page = await context.new_page()
+        
+        # Aplicar ocultamiento antirrastreo
+        await stealth_async(page)
 
         for asin in asins:
             print(f"Procesando ASIN: {asin}...")
             data = await scrape_buybox(page, asin)
             print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
             results.append(data)
-            await asyncio.sleep(3)
+            
+            # Pausa aleatoria entre 4 y 9 segundos para imitar comportamiento humano
+            wait_time = random.uniform(4.0, 9.0)
+            print(f"⏱️ Esperando {wait_time:.2f} segundos antes del siguiente ASIN...")
+            await asyncio.sleep(wait_time)
 
         await browser.close()
 
