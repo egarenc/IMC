@@ -15,9 +15,9 @@ INDEX_FILE = os.path.join(RESULTS_DIR, "index.json")
 # --------------------------------------------------------------------------
 # CONFIGURACIÓN DE PROXY WEBSHARE
 # --------------------------------------------------------------------------
-PROXY_SERVER = os.environ.get("PROXY_SERVER", "http://31.59.20.176:6754")
+PROXY_SERVER = os.environ.get("PROXY_SERVER", "http://64.137.96.74:6641")
 PROXY_USERNAME = os.environ.get("PROXY_USERNAME", "lqfkvxjs")
-PROXY_PASSWORD = os.environ.get("PROXY_PASSWORD", "o114si1p43m")
+PROXY_PASSWORD = os.environ.get("PROXY_PASSWORD", "o114si1p43rn")
 
 
 async def accept_cookies_if_present(page):
