@@ -20,13 +20,25 @@ PROXY_USERNAME = os.environ.get("PROXY_USERNAME", "lqfkvxjs")
 PROXY_PASSWORD = os.environ.get("PROXY_PASSWORD", "o114si1p43m")
 
 
+async def block_unnecessary_resources(route):
+    """Bloquea recursos pesados para no saturar la conexión del proxy."""
+    resource_type = route.request.resource_type
+    url = route.request.url.lower()
+    
+    # Permitimos scripts y documentos HTML pero bloqueamos multimedia pesada
+    if resource_type in ["image", "media", "font"] or "ads" in url or "analytics" in url:
+        await route.abort()
+    else:
+        await route.continue_()
+
+
 async def accept_cookies_if_present(page):
     """Acepta el banner de cookies si aparece."""
     try:
         cookie_btn = page.locator("#sp-cc-accept")
         if await cookie_btn.count() > 0 and await cookie_btn.is_visible():
-            await cookie_btn.click()
-            await asyncio.sleep(random.uniform(1.0, 2.0))
+            await cookie_btn.click(timeout=2000)
+            await asyncio.sleep(1.0)
             print("🍪 Banner de cookies aceptado.")
     except Exception:
         pass
@@ -45,10 +57,9 @@ async def handle_button_challenge_if_present(page):
             for sel in button_selectors:
                 btn = page.locator(sel).first
                 if await btn.count() > 0 and await btn.is_visible():
-                    await btn.click()
-                    print(f"✅ Clic realizado en botón ({sel}). Esperando recarga...")
-                    await page.wait_for_load_state("domcontentloaded")
-                    await asyncio.sleep(random.uniform(3.0, 5.0))
+                    await btn.click(timeout=2000)
+                    print(f"✅ Clic realizado en botón ({sel}).")
+                    await asyncio.sleep(2.0)
                     return True
     except Exception as e:
         print(f"⚠ Error al gestionar el desafío de botón: {e}")
@@ -69,29 +80,38 @@ async def solve_amazon_captcha_if_present(page):
                 print(f"🔑 Solución calculada por amazoncaptcha: {solution}")
 
                 if solution and solution != "Not solved":
-                    await page.fill("#captchacharacters", solution)
-                    await asyncio.sleep(random.uniform(0.5, 1.5))
-                    await page.click("button[type='submit']")
-                    await page.wait_for_load_state("domcontentloaded")
-                    await asyncio.sleep(random.uniform(2.0, 3.5))
+                    await page.fill("#captchacharacters", solution, timeout=2000)
+                    await page.click("button[type='submit']", timeout=2000)
+                    await asyncio.sleep(2.0)
                     print("✅ Formulario de CAPTCHA enviado.")
                     return True
-                else:
-                    print("❌ La librería no pudo descifrar la imagen del CAPTCHA.")
     except Exception as e:
         print(f"⚠️ Excepción al intentar resolver el CAPTCHA: {e}")
     return False
 
 
-async def save_screenshot(page, filepath):
-    """Guarda una captura de pantalla del viewport actual de forma segura."""
+async def save_diagnostic_data(page, asin, output_base_name, prefix):
+    """Guarda captura PNG e independientemente el archivo HTML por si falla el renderizado."""
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    base_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}_{prefix}")
+    
+    # 1. Intentar guardar volcado HTML (no depende de renderizar gráficos)
     try:
-        os.makedirs(RESULTS_DIR, exist_ok=True)
-        # Usamos full_page=False para evitar que el script colapse si la página no cargó completa
-        await page.screenshot(path=filepath, full_page=False, timeout=8000)
-        print(f"📸 Captura guardada en: {filepath}")
+        html_content = await page.content()
+        html_path = f"{base_path}.html"
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+        print(f"📄 Volcado HTML de diagnóstico guardado en: {html_path}")
     except Exception as err:
-        print(f"⚠️ No se pudo guardar la captura de pantalla ({filepath}): {err}")
+        print(f"⚠️ No se pudo guardar el HTML de diagnóstico: {err}")
+
+    # 2. Intentar captura PNG con timeout corto
+    try:
+        screenshot_path = f"{base_path}.png"
+        await page.screenshot(path=screenshot_path, full_page=False, timeout=4000)
+        print(f"📸 Captura guardada en: {screenshot_path}")
+    except Exception:
+        print("⚠️ No se pudo renderizar la captura PNG (Proxy lento), consulta el archivo .html generado.")
 
 
 async def scrape_buybox(page, asin, output_base_name):
@@ -99,14 +119,14 @@ async def scrape_buybox(page, asin, output_base_name):
     try:
         print(f"🔗 Cargando ASIN {asin} a través de Webshare Proxy...")
         
-        # 1. Carga con wait_until='commit' para evitar colgarse si el proxy es lento
+        # Carga ultra rápida sin esperar a recursos secundarios
         try:
-            await page.goto(url, timeout=25000, wait_until="commit")
-            await asyncio.sleep(3.0)
+            await page.goto(url, timeout=20000, wait_until="commit")
+            await asyncio.sleep(2.0)
         except Exception as goto_error:
-            print(f"⚠ Tiempo de espera en respuesta inicial, analizando lo recibido...")
+            print(f"⚠ Tiempo de espera en respuesta inicial ({goto_error}), procesando HTML...")
 
-        # 2. Manejo de cookies, captcha y desafíos
+        # Manejo de cookies, captcha y desafíos
         await accept_cookies_if_present(page)
         await handle_button_challenge_if_present(page)
         await solve_amazon_captcha_if_present(page)
@@ -116,7 +136,7 @@ async def scrape_buybox(page, asin, output_base_name):
         content = await page.content()
         content_lower = content.lower()
 
-        # Comprobar bloqueos
+        # Comprobar si fue bloqueado
         is_captcha = "captcha" in title.lower() or "validatecaptcha" in content_lower
         is_button_block = "haz click en el botón" in content_lower or "seguir comprando" in content_lower
         is_home_redirect = current_url.rstrip('/') == "https://www.amazon.es" or "ref=nav_logo" in current_url
@@ -124,9 +144,7 @@ async def scrape_buybox(page, asin, output_base_name):
         if is_captcha or is_button_block or is_home_redirect:
             block_type = "CAPTCHA" if is_captcha else ("Redirección Home" if is_home_redirect else "Botón Interactivo")
             print(f"⚠️ ASIN {asin} bloqueado o redirigido ({block_type}).")
-            
-            screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}_blocked.png")
-            await save_screenshot(page, screenshot_path)
+            await save_diagnostic_data(page, asin, output_base_name, "blocked")
 
             return {
                 "ASIN": asin,
@@ -136,22 +154,6 @@ async def scrape_buybox(page, asin, output_base_name):
                 "Disponibilidad": "N/D",
                 "URL_Final": current_url
             }
-
-        # 3. Pequeño scroll para forzar la carga de componentes lazy-loaded
-        try:
-            await page.evaluate("window.scrollBy(0, 350)")
-            await asyncio.sleep(1.5)
-        except Exception:
-            pass
-
-        # 4. Esperar hasta 6s si aparece el contenedor del precio
-        try:
-            await page.wait_for_selector(
-                "#corePrice_feature_div, #corePriceDisplay_desktop_feature_div, .apexPriceToPay, #priceblock_ourprice, #merchant-info",
-                timeout=6000
-            )
-        except Exception:
-            pass
 
         price_val = "N/D"
         seller_val = "N/D"
@@ -174,7 +176,7 @@ async def scrape_buybox(page, asin, output_base_name):
             try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    txt = await loc.text_content(timeout=1000)
+                    txt = await loc.text_content(timeout=800)
                     if txt and txt.strip() and "€" in txt:
                         price_val = txt.strip()
                         break
@@ -195,7 +197,7 @@ async def scrape_buybox(page, asin, output_base_name):
             try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    txt = await loc.text_content(timeout=1000)
+                    txt = await loc.text_content(timeout=800)
                     if txt and txt.strip():
                         clean_seller = " ".join(txt.split())
                         if len(clean_seller) > 2:
@@ -204,7 +206,7 @@ async def scrape_buybox(page, asin, output_base_name):
             except Exception:
                 continue
 
-        # Extracción de Disponibilidad / Texto de Ubicación
+        # Extracción de Disponibilidad
         avail_selectors = [
             "#availability",
             "#outOfStock",
@@ -215,7 +217,7 @@ async def scrape_buybox(page, asin, output_base_name):
             try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    txt = await loc.text_content(timeout=1000)
+                    txt = await loc.text_content(timeout=800)
                     if txt and txt.strip():
                         avail_val = " ".join(txt.split())
                         break
@@ -228,8 +230,7 @@ async def scrape_buybox(page, asin, output_base_name):
         elif "no disponible" in content_lower or "currently unavailable" in content_lower:
             estado = "Producto No Disponible"
         else:
-            screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}_no_buybox.png")
-            await save_screenshot(page, screenshot_path)
+            await save_diagnostic_data(page, asin, output_base_name, "no_buybox")
             estado = "Sin Buybox / Layout alternativo"
 
         return {
@@ -298,6 +299,9 @@ async def main():
         )
 
         page = await context.new_page()
+        
+        # Interceptamos y bloqueamos recursos no esenciales para optimizar el proxy
+        await page.route("**/*", block_unnecessary_resources)
 
         for asin in asins:
             print(f"Procesando ASIN: {asin}...")
@@ -305,7 +309,7 @@ async def main():
             print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
             results.append(data)
             
-            wait_time = random.uniform(4.0, 8.0)
+            wait_time = random.uniform(3.0, 6.0)
             print(f"⏱ Esperando {wait_time:.2f} segundos antes del siguiente ASIN...")
             await asyncio.sleep(wait_time)
 
