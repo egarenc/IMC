@@ -86,23 +86,16 @@ async def scrape_buybox(page, asin, output_base_name):
     try:
         print(f"🔗 Cargando ASIN {asin} a través de Webshare Proxy...")
         
-        # 1. Cambiamos wait_until a 'commit' para responder en cuanto llegue el HTML del servidor
+        # Carga inicial de la página
         try:
-            response = await page.goto(url, timeout=30000, wait_until="commit")
-            # Damos 10s extra para que el renderizado de DOM avance
-            try:
-                await page.wait_for_load_state("domcontentloaded", timeout=10000)
-            except Exception:
-                print("⏱️ La carga completa del DOM tardó más de lo esperado, procesando el HTML disponible...")
+            await page.goto(url, timeout=35000, wait_until="domcontentloaded")
         except Exception as goto_error:
-            print(f"⚠️ Error/Timeout en la navegación principal a {asin}: {goto_error}")
+            print(f"⚠️️ Tiempo de espera en lectura del DOM, intentando extraer con lo cargado...")
 
-        await asyncio.sleep(random.uniform(2.5, 4.5))
+        await asyncio.sleep(random.uniform(2.0, 3.5))
 
-        # 2. Aceptar cookies
+        # 1. Aceptar cookies y superar bloqueos
         await accept_cookies_if_present(page)
-
-        # 3. Gestionar desafíos intermedios
         await handle_button_challenge_if_present(page)
         await solve_amazon_captcha_if_present(page)
 
@@ -111,20 +104,19 @@ async def scrape_buybox(page, asin, output_base_name):
         content = await page.content()
         content_lower = content.lower()
 
-        # Comprobar estado de bloqueo o redirección
+        # Comprobar si hay bloqueo por CAPTCHA o Redirección
         is_captcha = "captcha" in title.lower() or "validatecaptcha" in content_lower
         is_button_block = "haz click en el botón" in content_lower or "seguir comprando" in content_lower
         is_home_redirect = current_url.rstrip('/') == "https://www.amazon.es" or "ref=nav_logo" in current_url
 
         if is_captcha or is_button_block or is_home_redirect:
             block_type = "CAPTCHA" if is_captcha else ("Redirección Home" if is_home_redirect else "Botón Interactivo")
-            print(f"⚠️ ASIN {asin} bloqueado o redirigido ({block_type}). URL Final: {current_url}")
+            print(f"⚠️ ASIN {asin} bloqueado o redirigido ({block_type}).")
             
             os.makedirs(RESULTS_DIR, exist_ok=True)
             screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}.png")
             try:
                 await page.screenshot(path=screenshot_path, full_page=True)
-                print(f"📸 Captura guardada en: {screenshot_path}")
             except Exception:
                 pass
 
@@ -136,6 +128,16 @@ async def scrape_buybox(page, asin, output_base_name):
                 "Disponibilidad": "N/D",
                 "URL_Final": current_url
             }
+
+        # 2. Esperar explícitamente hasta 8s a que se renderice algún contenedor de precio
+        print("⏳ Esperando que se renderice el precio/buybox...")
+        try:
+            await page.wait_for_selector(
+                "#corePrice_feature_div, #corePriceDisplay_desktop_feature_div, .apexPriceToPay, #priceblock_ourprice, #merchant-info, #availability",
+                timeout=8000
+            )
+        except Exception:
+            print("⚠️ No apareció el contenedor principal de precio tras 8s.")
 
         price_val = "N/D"
         seller_val = "N/D"
@@ -158,7 +160,7 @@ async def scrape_buybox(page, asin, output_base_name):
             try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    txt = await loc.text_content(timeout=1500)
+                    txt = await loc.text_content(timeout=1000)
                     if txt and txt.strip() and "€" in txt:
                         price_val = txt.strip()
                         break
@@ -179,7 +181,7 @@ async def scrape_buybox(page, asin, output_base_name):
             try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    txt = await loc.text_content(timeout=1500)
+                    txt = await loc.text_content(timeout=1000)
                     if txt and txt.strip():
                         clean_seller = " ".join(txt.split())
                         if len(clean_seller) > 2:
@@ -188,30 +190,38 @@ async def scrape_buybox(page, asin, output_base_name):
             except Exception:
                 continue
 
-        # Extracción de Disponibilidad
+        # Extracción de Disponibilidad / Texto de Ubicación
         avail_selectors = [
             "#availability",
             "#outOfStock",
-            ".a-color-price",
+            "#glow-ingress-block", # Muestra la ubicación actual (ej: "Enviar a España")
             "#availability span"
         ]
         for sel in avail_selectors:
             try:
                 loc = page.locator(sel).first
                 if await loc.count() > 0:
-                    txt = await loc.text_content(timeout=1500)
+                    txt = await loc.text_content(timeout=1000)
                     if txt and txt.strip():
                         avail_val = " ".join(txt.split())
                         break
             except Exception:
                 continue
 
-        # Estado del producto
+        # Clasificación del estado
         if price_val != "N/D" or seller_val != "N/D":
             estado = "OK"
         elif "no disponible" in content_lower or "currently unavailable" in content_lower:
             estado = "Producto No Disponible"
         else:
+            # Si no hay precio, guardamos una captura de pantalla para diagnóstico
+            os.makedirs(RESULTS_DIR, exist_ok=True)
+            screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}_no_buybox.png")
+            try:
+                await page.screenshot(path=screenshot_path, full_page=True)
+                print(f"📸 Captura de diagnóstico guardada en: {screenshot_path}")
+            except Exception:
+                pass
             estado = "Sin Buybox / Layout alternativo"
 
         return {
