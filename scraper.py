@@ -13,7 +13,7 @@ RESULTS_DIR = "results"
 INDEX_FILE = os.path.join(RESULTS_DIR, "index.json")
 
 async def accept_cookies_if_present(page):
-    """Acepta el banner de cookies si aparece para desencadenar el renderizado completo."""
+    """Acepta el banner de cookies si aparece."""
     try:
         cookie_btn = page.locator("#sp-cc-accept")
         if await cookie_btn.count() > 0 and await cookie_btn.is_visible():
@@ -23,8 +23,40 @@ async def accept_cookies_if_present(page):
     except Exception:
         pass
 
+async def handle_button_challenge_if_present(page):
+    """Detecta la pantalla con botón de 'seguir comprando' e intenta pulsar el botón."""
+    try:
+        content = await page.content()
+        content_lower = content.lower()
+        
+        # Palabras clave habituales en el bloqueo por botón de Amazon
+        keywords = ["haz click en el botón", "seguir comprando", "continue shopping", "click the button"]
+        if any(kw in content_lower for kw in keywords):
+            print("🔘 Desafío de botón interactivo detectado. Intentando hacer clic...")
+            
+            # Buscar el botón por distintos selectores habituales
+            button_selectors = [
+                "button[type='submit']",
+                "form button",
+                "input[type='submit']",
+                "a.a-button-text",
+                ".a-button-input"
+            ]
+            
+            for sel in button_selectors:
+                btn = page.locator(sel).first
+                if await btn.count() > 0 and await btn.is_visible():
+                    await btn.click()
+                    print(f"✅ Clic realizado en botón ({sel}). Esperando recarga...")
+                    await page.wait_for_load_state("domcontentloaded")
+                    await asyncio.sleep(random.uniform(3.0, 5.0))
+                    return True
+    except Exception as e:
+        print(f"⚠️️ Error al gestionar el desafío de botón: {e}")
+    return False
+
 async def solve_amazon_captcha_if_present(page):
-    """Detecta si Amazon muestra la pantalla de CAPTCHA y lo resuelve automáticamente."""
+    """Detecta si Amazon muestra CAPTCHA de imagen y lo resuelve con amazoncaptcha."""
     try:
         captcha_img = page.locator("form[action='/errors/validateCaptcha'] img")
         if await captcha_img.count() > 0:
@@ -59,34 +91,42 @@ async def scrape_buybox(page, asin, output_base_name):
         # 1. Aceptar banner de cookies si existe
         await accept_cookies_if_present(page)
 
-        # 2. Verificar e intentar resolver CAPTCHA de imagen si aparece
-        captcha_solved = await solve_amazon_captcha_if_present(page)
-        if captcha_solved:
-            await page.wait_for_load_state("domcontentloaded")
-            await asyncio.sleep(random.uniform(2.0, 3.5))
+        # 2. Gestionar desafío de botón si aparece
+        await handle_button_challenge_if_present(page)
 
-        # 3. Comprobar si seguimos bloqueados
+        # 3. Gestionar CAPTCHA de imagen si aparece
+        await solve_amazon_captcha_if_present(page)
+
+        # Obtener datos de depuración (URL final, título y HTML)
+        current_url = page.url
         title = await page.title()
         content = await page.content()
-        
-        if "captcha" in title.lower() or "validateCaptcha" in content:
-            print(f"⚠️ El CAPTCHA no se pudo resolver para el ASIN: {asin}")
+        content_lower = content.lower()
+
+        # 4. Comprobar si seguimos en pantalla de bloqueo
+        is_captcha = "captcha" in title.lower() or "validatecaptcha" in content_lower
+        is_button_block = "haz click en el botón" in content_lower or "seguir comprando" in content_lower
+
+        if is_captcha or is_button_block:
+            block_type = "CAPTCHA Imagen" if is_captcha else "Botón Interactivo"
+            print(f"⚠️ ASIN {asin} bloqueado ({block_type}). URL: {current_url}")
             
-            # Guardar captura de pantalla en la misma ruta del resultado Excel
+            # Guardar captura de pantalla
             os.makedirs(RESULTS_DIR, exist_ok=True)
             screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}.png")
             try:
                 await page.screenshot(path=screenshot_path, full_page=True)
-                print(f"📸 Captura de pantalla del bloqueo guardada en: {screenshot_path}")
+                print(f"📸 Captura del bloqueo guardada en: {screenshot_path}")
             except Exception as e_img:
                 print(f"⚠️ No se pudo guardar la captura de pantalla: {e_img}")
 
             return {
                 "ASIN": asin,
-                "Estado": "Bloqueado (CAPTCHA)",
+                "Estado": f"Bloqueado ({block_type})",
                 "Precio": "N/D",
                 "Vendedor": "N/D",
-                "Disponibilidad": "N/D"
+                "Disponibilidad": "N/D",
+                "URL_Final": current_url
             }
 
         if response and response.status != 200:
@@ -95,14 +135,15 @@ async def scrape_buybox(page, asin, output_base_name):
                 "Estado": f"Error HTTP {response.status}",
                 "Precio": "N/D",
                 "Vendedor": "N/D",
-                "Disponibilidad": "N/D"
+                "Disponibilidad": "N/D",
+                "URL_Final": current_url
             }
 
         price_val = "N/D"
         seller_val = "N/D"
         avail_val = "N/D"
 
-        # 4. Extracción de Precio con lista ampliada de selectores
+        # 5. Extracción de Precio
         price_selectors = [
             "#corePrice_feature_div .a-offscreen",
             "#corePriceDisplay_desktop_feature_div .a-offscreen",
@@ -127,7 +168,7 @@ async def scrape_buybox(page, asin, output_base_name):
             except Exception:
                 continue
 
-        # 5. Extracción de Vendedor con lista ampliada
+        # 6. Extracción de Vendedor
         seller_selectors = [
             "#merchant-info",
             "#sellerProfileTriggerId",
@@ -151,7 +192,7 @@ async def scrape_buybox(page, asin, output_base_name):
             except Exception:
                 continue
 
-        # 6. Extracción de Disponibilidad
+        # 7. Extracción de Disponibilidad
         avail_selectors = [
             "#availability",
             "#outOfStock",
@@ -169,21 +210,21 @@ async def scrape_buybox(page, asin, output_base_name):
             except Exception:
                 continue
 
-        # Evaluación del estado del producto
+        # Evaluación final del estado
         if price_val != "N/D" or seller_val != "N/D":
             estado = "OK"
-        elif "no disponible" in content.lower() or "currently unavailable" in content.lower():
+        elif "no disponible" in content_lower or "currently unavailable" in content_lower:
             estado = "Producto No Disponible"
         else:
             estado = "Sin Buybox / Layout alternativo"
-            print(f"🔍 DEBUG ASIN {asin}: Título de página: '{title}'")
 
         return {
             "ASIN": asin,
             "Estado": estado,
             "Precio": price_val,
             "Vendedor": seller_val,
-            "Disponibilidad": avail_val
+            "Disponibilidad": avail_val,
+            "URL_Final": current_url
         }
 
     except Exception as e:
@@ -193,7 +234,8 @@ async def scrape_buybox(page, asin, output_base_name):
             "Estado": f"Error: {str(e)}",
             "Precio": "N/D",
             "Vendedor": "N/D",
-            "Disponibilidad": "N/D"
+            "Disponibilidad": "N/D",
+            "URL_Final": page.url if page else url
         }
 
 async def main():
@@ -209,7 +251,6 @@ async def main():
     asins = df_input[col_asin[0]].dropna().astype(str).str.strip().tolist()
     print(f"✅ ASINs a procesar: {asins}")
 
-    # Generar el timestamp base para sincronizar los nombres de archivo
     now = datetime.now()
     timestamp_str = now.strftime("%Y%m%d_%H%M%S")
     display_date = now.strftime("%Y-%m-%d %H:%M:%S")
@@ -239,7 +280,7 @@ async def main():
         for asin in asins:
             print(f"Procesando ASIN: {asin}...")
             data = await scrape_buybox(page, asin, output_base_name)
-            print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
+            print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | URL: {data['URL_Final']}")
             results.append(data)
             
             wait_time = random.uniform(4.0, 9.0)
@@ -277,11 +318,11 @@ async def main():
     with open(INDEX_FILE, "w") as f:
         json.dump(index_data, f, indent=2)
 
-    # Limpieza automática del archivo de entrada al final
+    # Limpieza del archivo de entrada
     if os.path.exists(INPUT_FILE):
         try:
             os.remove(INPUT_FILE)
-            print(f"🧹 Archivo de entrada {INPUT_FILE} eliminado correctamente tras generar los resultados.")
+            print(f"🧹 Archivo {INPUT_FILE} eliminado tras procesar.")
         except Exception as e:
             print(f"⚠️ No se pudo eliminar el archivo de entrada: {e}")
 
