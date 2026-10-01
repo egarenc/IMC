@@ -5,7 +5,7 @@ import random
 from datetime import datetime
 import pandas as pd
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
+from playwright_stealth import Stealth
 from amazoncaptcha import AmazonCaptcha
 
 INPUT_FILE = "input/asins.xlsx"
@@ -201,7 +201,8 @@ async def main():
 
     results = []
 
-    async with async_playwright() as p:
+    # Uso de Stealth().use_async() para aplicar automáticamente las reglas stealth a todo el navegador
+    async with Stealth().use_async(async_playwright()) as p:
         browser = await p.chromium.launch(
             headless=True,
             args=[
@@ -218,12 +219,7 @@ async def main():
             timezone_id="Europe/Madrid"
         )
 
-        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-
         page = await context.new_page()
-        
-        # Aplicar ocultamiento antirrastreo
-        await stealth_async(page)
 
         for asin in asins:
             print(f"Procesando ASIN: {asin}...")
@@ -231,7 +227,7 @@ async def main():
             print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
             results.append(data)
             
-            # Pausa aleatoria entre 4 y 9 segundos para imitar comportamiento humano
+            # Pausa aleatoria entre 4 y 9 segundos
             wait_time = random.uniform(4.0, 9.0)
             print(f"⏱️ Esperando {wait_time:.2f} segundos antes del siguiente ASIN...")
             await asyncio.sleep(wait_time)
