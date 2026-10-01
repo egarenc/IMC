@@ -50,7 +50,7 @@ async def solve_amazon_captcha_if_present(page):
         print(f"⚠️ Excepción al intentar resolver el CAPTCHA: {e}")
     return False
 
-async def scrape_buybox(page, asin):
+async def scrape_buybox(page, asin, output_base_name):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
         response = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
@@ -71,6 +71,16 @@ async def scrape_buybox(page, asin):
         
         if "captcha" in title.lower() or "validateCaptcha" in content:
             print(f"⚠️ El CAPTCHA no se pudo resolver para el ASIN: {asin}")
+            
+            # Guardar captura de pantalla en la misma ruta del resultado Excel
+            os.makedirs(RESULTS_DIR, exist_ok=True)
+            screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}.png")
+            try:
+                await page.screenshot(path=screenshot_path, full_page=True)
+                print(f"📸 Captura de pantalla del bloqueo guardada en: {screenshot_path}")
+            except Exception as e_img:
+                print(f"⚠️ No se pudo guardar la captura de pantalla: {e_img}")
+
             return {
                 "ASIN": asin,
                 "Estado": "Bloqueado (CAPTCHA)",
@@ -199,9 +209,14 @@ async def main():
     asins = df_input[col_asin[0]].dropna().astype(str).str.strip().tolist()
     print(f"✅ ASINs a procesar: {asins}")
 
+    # Generar el timestamp base para sincronizar los nombres de archivo
+    now = datetime.now()
+    timestamp_str = now.strftime("%Y%m%d_%H%M%S")
+    display_date = now.strftime("%Y-%m-%d %H:%M:%S")
+    output_base_name = f"resultado_{timestamp_str}"
+
     results = []
 
-    # Uso de Stealth().use_async() para aplicar automáticamente las reglas stealth a todo el navegador
     async with Stealth().use_async(async_playwright()) as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -223,11 +238,10 @@ async def main():
 
         for asin in asins:
             print(f"Procesando ASIN: {asin}...")
-            data = await scrape_buybox(page, asin)
+            data = await scrape_buybox(page, asin, output_base_name)
             print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
             results.append(data)
             
-            # Pausa aleatoria entre 4 y 9 segundos
             wait_time = random.uniform(4.0, 9.0)
             print(f"⏱️ Esperando {wait_time:.2f} segundos antes del siguiente ASIN...")
             await asyncio.sleep(wait_time)
@@ -235,11 +249,7 @@ async def main():
         await browser.close()
 
     # Guardar Excel de salida
-    now = datetime.now()
-    timestamp_str = now.strftime("%Y%m%d_%H%M%S")
-    display_date = now.strftime("%Y-%m-%d %H:%M:%S")
-    
-    output_filename = f"resultado_{timestamp_str}.xlsx"
+    output_filename = f"{output_base_name}.xlsx"
     output_path = os.path.join(RESULTS_DIR, output_filename)
     
     os.makedirs(RESULTS_DIR, exist_ok=True)
