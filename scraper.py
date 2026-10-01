@@ -12,6 +12,15 @@ INPUT_FILE = "input/asins.xlsx"
 RESULTS_DIR = "results"
 INDEX_FILE = os.path.join(RESULTS_DIR, "index.json")
 
+# --------------------------------------------------------------------------
+# CONFIGURACIÓN DE PROXY WEBSHARE
+# Puedes definirlos en GitHub Secrets o poner los datos directamente aquí:
+# --------------------------------------------------------------------------
+PROXY_SERVER = os.environ.get("PROXY_SERVER", "http://p.webshare.io:80")
+PROXY_USERNAME = os.environ.get("PROXY_USERNAME", "TU_USUARIO_WEBSHARE")
+PROXY_PASSWORD = os.environ.get("PROXY_PASSWORD", "TU_PASSWORD_WEBSHARE")
+
+
 async def accept_cookies_if_present(page):
     """Acepta el banner de cookies si aparece."""
     try:
@@ -24,25 +33,15 @@ async def accept_cookies_if_present(page):
         pass
 
 async def handle_button_challenge_if_present(page):
-    """Detecta la pantalla con botón de 'seguir comprando' e intenta pulsar el botón."""
+    """Gestiona desafíos de botón interactivo si aparecen."""
     try:
         content = await page.content()
         content_lower = content.lower()
         
-        # Palabras clave habituales en el bloqueo por botón de Amazon
         keywords = ["haz click en el botón", "seguir comprando", "continue shopping", "click the button"]
         if any(kw in content_lower for kw in keywords):
             print("🔘 Desafío de botón interactivo detectado. Intentando hacer clic...")
-            
-            # Buscar el botón por distintos selectores habituales
-            button_selectors = [
-                "button[type='submit']",
-                "form button",
-                "input[type='submit']",
-                "a.a-button-text",
-                ".a-button-input"
-            ]
-            
+            button_selectors = ["button[type='submit']", "form button", "input[type='submit']"]
             for sel in button_selectors:
                 btn = page.locator(sel).first
                 if await btn.count() > 0 and await btn.is_visible():
@@ -56,7 +55,7 @@ async def handle_button_challenge_if_present(page):
     return False
 
 async def solve_amazon_captcha_if_present(page):
-    """Detecta si Amazon muestra CAPTCHA de imagen y lo resuelve con amazoncaptcha."""
+    """Detecta e intenta resolver CAPTCHA de imagen si aparece."""
     try:
         captcha_img = page.locator("form[action='/errors/validateCaptcha'] img")
         if await captcha_img.count() > 0:
@@ -85,40 +84,38 @@ async def solve_amazon_captcha_if_present(page):
 async def scrape_buybox(page, asin, output_base_name):
     url = f"https://www.amazon.es/dp/{asin}"
     try:
-        response = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+        print(f"🔗 Cargando ASIN {asin} a través de Webshare Proxy...")
+        response = await page.goto(url, timeout=35000, wait_until="domcontentloaded")
         await asyncio.sleep(random.uniform(2.0, 4.0))
 
-        # 1. Aceptar banner de cookies si existe
+        # 1. Aceptar cookies
         await accept_cookies_if_present(page)
 
-        # 2. Gestionar desafío de botón si aparece
+        # 2. Gestionar desafíos intermedios
         await handle_button_challenge_if_present(page)
-
-        # 3. Gestionar CAPTCHA de imagen si aparece
         await solve_amazon_captcha_if_present(page)
 
-        # Obtener datos de depuración (URL final, título y HTML)
         current_url = page.url
         title = await page.title()
         content = await page.content()
         content_lower = content.lower()
 
-        # 4. Comprobar si seguimos en pantalla de bloqueo
+        # Comprobar estado de bloqueo o redirección
         is_captcha = "captcha" in title.lower() or "validatecaptcha" in content_lower
         is_button_block = "haz click en el botón" in content_lower or "seguir comprando" in content_lower
+        is_home_redirect = current_url.rstrip('/') == "https://www.amazon.es" or "ref=nav_logo" in current_url
 
-        if is_captcha or is_button_block:
-            block_type = "CAPTCHA Imagen" if is_captcha else "Botón Interactivo"
-            print(f"⚠️ ASIN {asin} bloqueado ({block_type}). URL: {current_url}")
+        if is_captcha or is_button_block or is_home_redirect:
+            block_type = "CAPTCHA" if is_captcha else ("Redirección Home" if is_home_redirect else "Botón Interactivo")
+            print(f"⚠️ ASIN {asin} bloqueado o redirigido ({block_type}). URL Final: {current_url}")
             
-            # Guardar captura de pantalla
             os.makedirs(RESULTS_DIR, exist_ok=True)
             screenshot_path = os.path.join(RESULTS_DIR, f"{output_base_name}_{asin}.png")
             try:
                 await page.screenshot(path=screenshot_path, full_page=True)
-                print(f"📸 Captura del bloqueo guardada en: {screenshot_path}")
-            except Exception as e_img:
-                print(f"⚠️ No se pudo guardar la captura de pantalla: {e_img}")
+                print(f"📸 Captura guardada en: {screenshot_path}")
+            except Exception:
+                pass
 
             return {
                 "ASIN": asin,
@@ -143,7 +140,7 @@ async def scrape_buybox(page, asin, output_base_name):
         seller_val = "N/D"
         avail_val = "N/D"
 
-        # 5. Extracción de Precio
+        # Extracción de Precio
         price_selectors = [
             "#corePrice_feature_div .a-offscreen",
             "#corePriceDisplay_desktop_feature_div .a-offscreen",
@@ -156,7 +153,6 @@ async def scrape_buybox(page, asin, output_base_name):
             ".a-price .a-offscreen",
             "span.a-price span.a-offscreen"
         ]
-        
         for sel in price_selectors:
             try:
                 loc = page.locator(sel).first
@@ -168,7 +164,7 @@ async def scrape_buybox(page, asin, output_base_name):
             except Exception:
                 continue
 
-        # 6. Extracción de Vendedor
+        # Extracción de Vendedor
         seller_selectors = [
             "#merchant-info",
             "#sellerProfileTriggerId",
@@ -178,7 +174,6 @@ async def scrape_buybox(page, asin, output_base_name):
             "#fbaProfileTriggerId",
             "#merchant-info a"
         ]
-        
         for sel in seller_selectors:
             try:
                 loc = page.locator(sel).first
@@ -192,7 +187,7 @@ async def scrape_buybox(page, asin, output_base_name):
             except Exception:
                 continue
 
-        # 7. Extracción de Disponibilidad
+        # Extracción de Disponibilidad
         avail_selectors = [
             "#availability",
             "#outOfStock",
@@ -210,7 +205,7 @@ async def scrape_buybox(page, asin, output_base_name):
             except Exception:
                 continue
 
-        # Evaluación final del estado
+        # Estado del producto
         if price_val != "N/D" or seller_val != "N/D":
             estado = "OK"
         elif "no disponible" in content_lower or "currently unavailable" in content_lower:
@@ -239,7 +234,7 @@ async def scrape_buybox(page, asin, output_base_name):
         }
 
 async def main():
-    print("--- INICIANDO PROCESO DE SCRAPING ---")
+    print("--- INICIANDO PROCESO DE SCRAPING CON PROXY WEBSHARE ---")
     if not os.path.exists(INPUT_FILE):
         raise FileNotFoundError(f"❌ No existe {INPUT_FILE}")
 
@@ -258,6 +253,13 @@ async def main():
 
     results = []
 
+    # Configuración del proxy de Webshare
+    proxy_config = {
+        "server": PROXY_SERVER,
+        "username": PROXY_USERNAME,
+        "password": PROXY_PASSWORD
+    }
+
     async with Stealth().use_async(async_playwright()) as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -268,7 +270,9 @@ async def main():
             ]
         )
         
+        # Iniciar contexto con el proxy de Webshare integrado
         context = await browser.new_context(
+            proxy=proxy_config,
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={"width": 1920, "height": 1080},
             locale="es-ES",
@@ -280,11 +284,11 @@ async def main():
         for asin in asins:
             print(f"Procesando ASIN: {asin}...")
             data = await scrape_buybox(page, asin, output_base_name)
-            print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | URL: {data['URL_Final']}")
+            print(f" -> Resultado: {data['Estado']} | Precio: {data['Precio']} | Vendedor: {data['Vendedor']}")
             results.append(data)
             
             wait_time = random.uniform(4.0, 9.0)
-            print(f"⏱️ Esperando {wait_time:.2f} segundos antes del siguiente ASIN...")
+            print(f"⏱️️ Esperando {wait_time:.2f} segundos antes del siguiente ASIN...")
             await asyncio.sleep(wait_time)
 
         await browser.close()
